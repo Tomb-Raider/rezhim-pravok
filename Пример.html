@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Пример страницы для режима правок</title>
+<style>
+/* Обычная страница. Режим правок подключён строкой внизу и включён всегда (data-auto), это пример */
+:root { --bg: #F6F5F1; --ink: #16181C; --mute: #6B6E75; --accent: #2E6BE6; --card: #FFFFFF; --line: #E2E0DA; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+.page { max-width: 1120px; margin: 0 auto; padding: 56px 32px 120px; }
+.hero { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+h1 { font-size: 56px; line-height: 1.05; letter-spacing: -0.02em; margin: 0 0 20px; }
+.lead { font-size: 21px; color: var(--mute); margin: 0 0 28px; max-width: 30em; }
+.btn { display: inline-block; background: var(--accent); color: #fff; text-decoration: none; padding: 14px 22px; border-radius: 10px; font-weight: 600; }
+.shot { width: 100%; height: auto; border-radius: 12px; display: block; }
+h2 { font-size: 32px; margin: 96px 0 24px; letter-spacing: -0.01em; }
+.cards { display: flex; gap: 24px; }
+.card { flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px; }
+.card h3 { margin: 0 0 8px; font-size: 21px; }
+.card p { margin: 0; color: var(--mute); font-size: 17px; }
+.note { margin-top: 64px; font-size: 15px; color: var(--mute); }
+@media (max-width: 760px) {
+  .page { padding: 32px 20px 96px; }
+  .hero { grid-template-columns: 1fr; gap: 28px; }
+  h1 { font-size: 38px; }
+  .cards { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <section class="hero" id="hero">
+    <div>
+      <h1>Правки прямо на&nbsp;странице</h1>
+      <p class="lead">Потяните фото или карточку, поправьте текст двойным щелчком, оставьте замечание. Потом скопируйте правки и&nbsp;отдайте их&nbsp;ИИ</p>
+      <a class="btn" href="index.html">Как подключить</a>
+    </div>
+    <img class="shot" src="img/player.png" alt="Плеер ролика из HTML">
+  </section>
+
+  <section id="how">
+    <h2>Три движения</h2>
+    <div class="cards">
+      <div class="card"><h3>Двигать</h3><p>Тяните мышью, края прилипают к&nbsp;соседям</p></div>
+      <div class="card"><h3>Править текст</h3><p>Двойной щелчок по&nbsp;тексту, правьте как в&nbsp;документе</p></div>
+      <div class="card"><h3>Отдать ИИ</h3><p>«Скопировать правки» и&nbsp;вставить в&nbsp;чат одним сообщением</p></div>
+    </div>
+    <p class="note">Это пример. Сама страница не меняется, правки хранятся в&nbsp;браузере</p>
+  </section>
+</div>
+<script src="pravki.js" data-auto="1" defer></script>
+</body>
+</html>
