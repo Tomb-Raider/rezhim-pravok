@@ -5,11 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Режим правок</title>
 <style>
-/* Стартовая страница пакета «Режим правок». Цвета как у пакета «Ролик из HTML» */
+/* Стартовая страница пакета «Режим правок». Цвета и шапка как у пакета «Ролик из HTML» */
 :root {
   --ui-bg: #121316; --ui-fg: #ECECEE; --ui-mute: #86878D; --ui-line: #232428; --ui-line2: #393A40;
   --go: #21A038;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 html { background: var(--ui-bg); color: var(--ui-fg); }
 body {
@@ -17,122 +16,173 @@ body {
   font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-.page { max-width: 1120px; margin: 0 auto; padding: 28px 24px 120px; }
-.nav { display: flex; flex-wrap: wrap; gap: 4px 22px; margin-bottom: 72px; font-size: 14px; }
-.nav a { color: var(--ui-mute); text-decoration: none; }
-.nav a:hover, .nav a.on { color: var(--ui-fg); }
-h1 { margin: 0 0 18px; font-size: 48px; line-height: 1.08; font-weight: 650; letter-spacing: -0.02em; }
-h2 { margin: 96px 0 14px; font-size: 30px; line-height: 1.15; font-weight: 620; letter-spacing: -0.01em; }
-p, li { max-width: 740px; }
-p { margin: 0 0 14px; }
-ul, ol { margin: 0 0 14px; padding-left: 22px; }
-li { margin: 0 0 6px; }
+.page { max-width: 1120px; margin: 0 auto; padding: 24px 24px 120px; }
 a { color: var(--ui-fg); text-underline-offset: 3px; text-decoration-color: var(--ui-line2); }
-.lead { max-width: 760px; margin: 0 0 20px; font-size: 20px; line-height: 1.5; color: var(--ui-mute); }
+p { margin: 0 0 12px; }
 .mute { color: var(--ui-mute); }
-code, kbd { font: 0.9em/1 var(--mono); padding: 2px 5px; border-radius: 4px; background: var(--ui-line); }
-.list { list-style: none; padding: 0; margin: 0 0 14px; }
-.list li { margin: 0 0 14px; font-size: 18px; }
-.list a { font-weight: 600; }
+kbd { font: 0.88em/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 2px 5px; border-radius: 4px; background: var(--ui-line); }
 
+/* Общая шапка двух пакетов: оба на одном месте, переход в той же вкладке */
+.top { display: flex; gap: 24px; font-size: 15px; }
+.top a { color: var(--ui-mute); text-decoration: none; }
+.top a:hover { color: var(--ui-fg); }
+.top a.on { color: var(--ui-fg); font-weight: 600; }
+
+h1 { margin: 88px 0 16px; font-size: 48px; line-height: 1.08; font-weight: 650; letter-spacing: -0.02em; }
+h2 { margin: 104px 0 32px; font-size: 30px; line-height: 1.15; font-weight: 620; letter-spacing: -0.01em; }
+h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
+.lead { max-width: 680px; margin: 0 0 28px; font-size: 20px; line-height: 1.5; color: var(--ui-mute); }
+
+.btn {
+  display: inline-block; padding: 13px 22px; border-radius: 8px; border: 0; cursor: pointer;
+  background: var(--ui-fg); color: var(--ui-bg); font: 600 16px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  text-decoration: none;
+}
+.btn:hover { opacity: .9; }
+.btn.ghost { background: transparent; color: var(--ui-fg); box-shadow: inset 0 0 0 1px var(--ui-line2); }
+.link { background: none; border: 0; padding: 0; cursor: pointer; color: var(--ui-fg); font: inherit;
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--ui-line2); }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 4px 0 12px; }
+
+.shot { display: block; width: 100%; height: auto; border-radius: 10px; margin: 40px 0 32px; }
+.three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px; color: var(--ui-mute); }
+.three p { margin: 0; }
+
+/* Три способа */
+.ways { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; }
+.ways .who { color: var(--ui-mute); margin-bottom: 16px; }
+.phrase { margin: 4px 0 12px; padding: 14px 16px; border-radius: 8px; background: var(--ui-line); line-height: 1.5; }
 .bm {
-  display: inline-flex; align-items: center; gap: 10px; margin: 8px 0 18px; padding: 12px 20px; border-radius: 999px;
-  background: #0B0D10; color: #fff; text-decoration: none; font-weight: 600; font-size: 16px;
+  display: inline-flex; align-items: center; gap: 9px; padding: 10px 18px; border-radius: 999px;
+  background: #0B0D10; color: #fff; text-decoration: none; font-weight: 600; font-size: 15px;
   box-shadow: inset 0 0 0 1px var(--ui-line2); cursor: grab;
 }
-.bm::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--go); }
-.bm:hover { box-shadow: inset 0 0 0 1px var(--ui-mute); }
-.try {
-  display: inline-block; margin: 8px 0 14px; padding: 12px 20px; border-radius: 8px; background: var(--ui-fg);
-  color: var(--ui-bg); text-decoration: none; font-weight: 600;
-}
-.try:hover { opacity: .9; }
-.keys { list-style: none; padding: 0; }
-.keys li { margin: 0 0 8px; }
+.bm::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--go); }
 
-@media (max-width: 640px) {
-  .page { padding: 20px 16px 96px; }
-  .nav { margin-bottom: 48px; }
-  h1 { font-size: 36px; }
-  h2 { font-size: 26px; margin-top: 72px; }
+/* Что открылось */
+#picked { margin: 8px 0 12px; }
+#picked:empty { display: none; }
+#picked ul { list-style: none; padding: 0; margin: 8px 0 0; }
+#picked li { margin: 0 0 6px; }
+#picked li a { font-weight: 600; }
+#picked .warn { color: #F2C14E; }
+#drop { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
+  background: rgba(18,19,22,.86); font-size: 28px; font-weight: 600; pointer-events: none; }
+#drop.on { display: flex; }
+
+.foot { margin-top: 104px; display: flex; flex-wrap: wrap; gap: 8px 28px; color: var(--ui-mute); font-size: 15px; }
+.foot a { color: var(--ui-mute); }
+.foot a:hover { color: var(--ui-fg); }
+
+@media (max-width: 860px) {
+  .page { padding: 18px 16px 96px; }
+  h1 { margin-top: 56px; font-size: 36px; }
+  h2 { margin-top: 72px; font-size: 26px; }
   .lead { font-size: 18px; }
+  .three, .ways { grid-template-columns: 1fr; gap: 20px; }
+  .ways { gap: 48px; }
 }
 </style>
 </head>
 <body>
 <div class="page">
 
-<nav class="nav">
-  <a class="on" href="index.html">Режим правок</a>
-  <a href="%D0%9F%D1%80%D0%B8%D0%BC%D0%B5%D1%80.html?pravki">Пример</a>
-  <a href="https://tomb-raider.github.io/rolik-iz-html/">Ролик из HTML</a>
+<nav class="top">
+  <a href="https://tomb-raider.github.io/rolik-iz-html/">Ролик из&nbsp;HTML</a>
+  <a class="on" href="./">Режим правок</a>
 </nav>
 
 <h1>Режим правок</h1>
-<p class="lead">Двигайте фото и&nbsp;блоки, правьте текст и&nbsp;оставляйте замечания прямо на&nbsp;HTML-странице, а&nbsp;потом отдайте всё ИИ одним сообщением. Для сайтов и&nbsp;презентаций. Без установки программ</p>
+<p class="lead">Правьте HTML-страницу прямо в&nbsp;браузере, а&nbsp;потом отдайте правки ИИ одним сообщением. Для презентаций и&nbsp;сайтов, без установки программ</p>
+<a class="btn" href="%D0%9F%D1%80%D0%B8%D0%BC%D0%B5%D1%80.html">Попробовать на&nbsp;примере</a>
 
-<h2>Попробовать</h2>
-<p>На странице примера режим уже включён. Потяните фото или карточку, дважды щёлкните по&nbsp;тексту, нажмите «Скопировать правки»</p>
-<a class="try" href="%D0%9F%D1%80%D0%B8%D0%BC%D0%B5%D1%80.html?pravki">Открыть пример</a>
+<img class="shot" src="img/screenshot.png" alt="Страница в режиме правок: выбран блок, розовая линия привязки, панель режима внизу">
+<div class="three">
+  <p>Тяните фото и&nbsp;блоки, края прилипают к&nbsp;соседям и&nbsp;к&nbsp;сетке</p>
+  <p>Двойной щелчок правит текст, Alt + щелчок оставляет замечание</p>
+  <p>«Скопировать правки» отдаёт всё ИИ одним сообщением, а&nbsp;он вносит правки в&nbsp;файлы</p>
+</div>
 
-<h2>Закладка</h2>
-<p>Перетащите кнопку на&nbsp;панель закладок браузера. Если панели не&nbsp;видно, включите её: <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Mac, <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Windows</p>
-<a class="bm" title="Перетащите на панель закладок" href="javascript:(function(){if(window.__pravki)return;var s=document.createElement('script');s.src='https://tomb-raider.github.io/rezhim-pravok/pravki.js?v='+Date.now();s.setAttribute('data-auto','1');document.documentElement.appendChild(s);})()">Режим правок</a>
-<p>Потом откройте свою страницу: сайт, презентацию или HTML-файл двойным щелчком, и&nbsp;нажмите закладку. Внизу слева появится панель режима</p>
-<p class="mute">Закладка подгружает режим с&nbsp;этого сайта, нужен интернет. Сам режим ничего не&nbsp;отправляет в&nbsp;сеть, правки остаются в&nbsp;браузере. Некоторые большие сайты своей защитой не&nbsp;пускают закладку. Если файлы сайта у&nbsp;вас, включите режим через ИИ-агента, как написано в&nbsp;«Как пользоваться»</p>
+<h2>Три способа вносить правки</h2>
+<div class="ways">
 
-<h2>Что умеет</h2>
-<ul>
-  <li>Тянуть мышью фото, блоки и&nbsp;текст. Края прилипают к&nbsp;соседям, видна розовая линия. Всё внутри карточки тянет карточку целиком</li>
-  <li>Менять размер за&nbsp;квадратик в&nbsp;углу. Фото держит пропорции</li>
-  <li>Показывать сетку колонок режима, края встают и&nbsp;по&nbsp;ней</li>
-  <li>Править текст двойным щелчком прямо на&nbsp;странице</li>
-  <li>Оставлять замечание к&nbsp;чему угодно: <kbd>Alt</kbd> + щелчок</li>
-  <li>Откатывать и&nbsp;возвращать правки и&nbsp;сдвиги</li>
-  <li>Показывать страницу с&nbsp;правками на&nbsp;ширине телефона</li>
-  <li>Отдавать всё одним текстом для ИИ: что было и&nbsp;что стало, куда и&nbsp;насколько сдвинуто, к&nbsp;чему выровнено</li>
-</ul>
-<p class="mute">Сама страница не&nbsp;меняется. Правки хранятся в&nbsp;браузере по&nbsp;каждой странице, страницу можно закрыть и&nbsp;вернуться. В&nbsp;файлы правки вносит ИИ</p>
+  <div>
+    <h3>Открыть файл здесь</h3>
+    <p class="who">Если работаете с&nbsp;ИИ в&nbsp;чате: ChatGPT, GigaChat, Claude</p>
+    <p>Выберите папку с&nbsp;презентацией или сайтом. Страница откроется в&nbsp;этой вкладке уже в&nbsp;режиме правок</p>
+    <p>Когда закончите, нажмите «Скопировать правки» и&nbsp;отправьте в&nbsp;чат инструкцию, файл страницы и&nbsp;правки. ИИ пришлёт исправленный файл</p>
+    <div class="row">
+      <button class="btn" data-open="dir">Открыть папку</button>
+      <button class="link" data-open="file">или один файл</button>
+    </div>
+    <div id="picked" aria-live="polite"></div>
+    <p><button class="link" data-copy="instr">Скопировать инструкцию для&nbsp;ИИ</button></p>
+    <p class="mute">Файлы остаются у&nbsp;вас в&nbsp;браузере, в&nbsp;интернет они не&nbsp;уходят</p>
+  </div>
 
-<h2>Отдать правки ИИ</h2>
-<p>Нажмите «Скопировать правки». Текст начнётся со&nbsp;слов «ПРАВКИ САЙТА»</p>
-<ul>
-  <li><b>В&nbsp;чате</b> ChatGPT, GigaChat, Claude. Первым сообщением «Инструкция для ИИ», вторым HTML-файл страницы и&nbsp;правки. ИИ пришлёт исправленный файл целиком</li>
-  <li><b>Агенту в&nbsp;папке</b> Claude Code, Codex, Cursor, GigaCode. Положите «Инструкцию для ИИ» рядом с&nbsp;сайтом как <code>CLAUDE.md</code> или <code>AGENTS.md</code>, а&nbsp;если такой файл уже есть, допишите в&nbsp;его конец. Потом вставьте правки. Агент сам найдёт каждое место</li>
-</ul>
+  <div>
+    <h3>Попросить агента</h3>
+    <p class="who">Если работаете с&nbsp;агентом в&nbsp;папке: Claude Code, Cursor, Codex, GigaCode</p>
+    <p>Отправьте агенту эту фразу из&nbsp;папки с&nbsp;презентацией</p>
+    <div class="phrase" id="phrase">Включи режим правок для этой папки. Возьми его с&nbsp;github.com/Tomb-Raider/rezhim-pravok и&nbsp;сделай всё по&nbsp;его «Инструкции для ИИ». Правки, которые я&nbsp;потом пришлю, вноси по&nbsp;ней&nbsp;же</div>
+    <p><button class="btn ghost" data-copy="phrase">Скопировать фразу</button></p>
+    <p class="mute">Агент откроет страницу в&nbsp;браузере уже в&nbsp;режиме правок. Когда закончите, вставьте ему правки, и&nbsp;он сам внесёт их&nbsp;в&nbsp;файлы</p>
+  </div>
 
-<h2>Клавиши</h2>
-<ul class="keys">
-  <li>Тянуть мышью двигает, с&nbsp;<kbd>Cmd</kbd> (на&nbsp;Windows <kbd>Ctrl</kbd>) без привязки, с&nbsp;<kbd>Shift</kbd> берёт блок уровнем выше</li>
-  <li>Стрелки двигают выбранное на&nbsp;1&nbsp;px, с&nbsp;<kbd>Shift</kbd> на&nbsp;10</li>
-  <li>Двойной щелчок или <kbd>Enter</kbd> правит текст, <kbd>Esc</kbd> заканчивает</li>
-  <li><kbd>Alt</kbd> + щелчок оставляет замечание</li>
-  <li><kbd>Cmd</kbd> + <kbd>Z</kbd> назад, <kbd>Shift</kbd> + <kbd>Cmd</kbd> + <kbd>Z</kbd> вперёд. На&nbsp;Windows <kbd>Ctrl</kbd> вместо <kbd>Cmd</kbd></li>
-  <li><kbd>Alt</kbd> + пробел или <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + пробел ставит неразрывный пробел</li>
-</ul>
+  <div>
+    <h3>Закладка для сайтов</h3>
+    <p class="who">Если страница уже в&nbsp;интернете</p>
+    <p>Перетащите кнопку на&nbsp;панель закладок, откройте сайт и&nbsp;нажмите закладку</p>
+    <p><a class="bm" data-bm href="#">Режим правок</a></p>
+    <p class="mute">Панель закладок включается <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Mac и&nbsp;<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Windows. Некоторые большие сайты не&nbsp;пускают закладку</p>
+  </div>
+</div>
 
-<h2>Инструкции</h2>
-<ul class="list">
-  <li><a href="https://github.com/Tomb-Raider/rezhim-pravok/blob/main/%D0%9A%D0%B0%D0%BA%20%D0%BF%D0%BE%D0%BB%D1%8C%D0%B7%D0%BE%D0%B2%D0%B0%D1%82%D1%8C%D1%81%D1%8F.md">Как пользоваться</a> <span class="mute">три способа включить режим и&nbsp;как отдать правки ИИ</span></li>
-  <li><a href="https://github.com/Tomb-Raider/rezhim-pravok/blob/main/%D0%98%D0%BD%D1%81%D1%82%D1%80%D1%83%D0%BA%D1%86%D0%B8%D1%8F%20%D0%B4%D0%BB%D1%8F%20%D0%98%D0%98.md">Инструкция для ИИ</a> <span class="mute">первое сообщение в&nbsp;чат или <code>CLAUDE.md</code> для агента</span></li>
-</ul>
-
-<h2>Как скачать</h2>
-<p>Откройте <a href="https://github.com/Tomb-Raider/rezhim-pravok">страницу пакета на&nbsp;GitHub</a>, нажмите зелёную кнопку «Code», затем «Download ZIP». Для закладки скачивать ничего не&nbsp;нужно</p>
-<p class="mute">Лицензия MIT</p>
+<div class="foot">
+  <a href="https://github.com/Tomb-Raider/rezhim-pravok/archive/refs/heads/main.zip">Скачать пакет</a>
+  <a href="https://github.com/Tomb-Raider/rezhim-pravok">Пакет на&nbsp;GitHub</a>
+  <span>Лицензия MIT</span>
+</div>
 
 </div>
+
+<input type="file" id="dirIn" webkitdirectory hidden>
+<input type="file" id="fileIn" accept=".html,.htm" multiple hidden>
+<div id="drop">Отпустите, чтобы открыть</div>
+
 <script>
-// Ссылки на другие сайты открываются в новой вкладке
-for (const a of document.querySelectorAll('a[href^="http"]')) { a.target = '_blank'; a.rel = 'noopener'; }
 // Закладку не открываем щелчком, её тянут на панель
-const bm = document.querySelector('.bm');
-bm.addEventListener('click', e => {
-  e.preventDefault();
-  bm.textContent = 'Тяните на панель закладок';
-  clearTimeout(bm.t);
-  bm.t = setTimeout(() => { bm.textContent = 'Режим правок'; }, 1800);
-});
+const BM = "javascript:(function(){if(window.__pravki)return;var s=document.createElement('script');s.src='https://tomb-raider.github.io/rezhim-pravok/pravki.js?v='+Date.now();s.setAttribute('data-auto','1');document.documentElement.appendChild(s);})()"
+for (const a of document.querySelectorAll('[data-bm]')) {
+  a.href = BM
+  a.title = 'Перетащите на панель закладок'
+  a.addEventListener('click', e => {
+    e.preventDefault()
+    a.textContent = 'Тяните на панель закладок'
+    clearTimeout(a.t)
+    a.t = setTimeout(() => { a.textContent = 'Режим правок' }, 1800)
+  })
+}
+
+// Инструкцию берём заранее, чтобы копирование сработало сразу по щелчку.
+// На GitHub Pages файлы .md превращаются в страницы, поэтому запасной путь через raw.githubusercontent.com
+const INSTR = 'Инструкция для ИИ.md'
+const RAW = 'https://raw.githubusercontent.com/Tomb-Raider/rezhim-pravok/main/' + encodeURIComponent(INSTR)
+let instr = ''
+const asText = r => r.ok ? r.text().then(t => /^\s*</.test(t) ? Promise.reject() : t) : Promise.reject()
+fetch(encodeURIComponent(INSTR)).then(asText).catch(() => fetch(RAW).then(asText)).then(t => { instr = t }).catch(() => {})
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-copy]')
+  if (!b) return
+  const text = b.dataset.copy === 'phrase' ? document.getElementById('phrase').textContent : instr
+  if (!text) return
+  await navigator.clipboard.writeText(text)
+  const was = b.textContent
+  b.textContent = 'Скопировано'
+  setTimeout(() => { b.textContent = was }, 1600)
+})
 </script>
+<script src="open.js"></script>
 </body>
 </html>

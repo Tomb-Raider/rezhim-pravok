@@ -21,7 +21,7 @@
    - Alt + щелчок по чему угодно → замечание, Alt + Shift → блок уровнем выше;
    - Alt + пробел → неразрывный пробел, Enter → перенос строки;
    - назад и вперёд по правкам и сдвигам (Cmd/Ctrl + Z, Shift + Cmd/Ctrl + Z);
-   - сетка колонок по кнопке, к ней тоже прилипает;
+   - сетка по кнопке: клетка или колонки, размеры ползунками, к ней тоже прилипает;
    - просмотр страницы с правками на ширине телефона;
    - правки копятся в localStorage по каждой странице и отдаются одним
      текстом «ПРАВКИ САЙТА · … · записей: N».
@@ -37,9 +37,12 @@
      freeze   true → остановить GSAP, ScrollTrigger и Lenis
      reveal   true → сразу показать всё, что спрятано до прокрутки
      css      свои стили на время правки
-     grid     { cols: 12, gutter: 24, margin, row: 8, frame: ".slide" } —
-              сетка: колонки, промежуток, поля (по умолчанию отступы кадра),
-              шаг строк и селектор кадра, по которому она строится
+     grid     { type: "cell", step: 8, cols: 12, gutter: 24, margin, row: 8, frame: ".slide" } —
+              сетка: клетка с шагом step или колонки (cols, промежуток, поля,
+              по умолчанию отступы кадра, шаг строк row) и селектор кадра.
+              Меню «Сетка» меняет вид и размеры, выбор помнит браузер
+     base, baseURL, pagesList — для страницы «Открыть свой файл» на сайте
+              пакета: начало адреса, которое не входит в имя страницы, и список страниц
    ============================================================ */
 
 (() => {
@@ -64,6 +67,8 @@
   const PAGE = (() => {
     let p = decodeURIComponent(location.pathname).replace(/^\/+/, '');
     if (location.protocol === 'file:') p = p.split('/').pop();
+    const base = (CFG.base || '').replace(/^\/+/, '');
+    if (base && p.startsWith(base)) p = p.slice(base.length);
     if (!p || p.endsWith('/')) p += 'index.html';
     return p;
   })();
@@ -800,6 +805,21 @@
          font-variant-numeric:tabular-nums;color:#fff;background:#4C8DFF;padding:4px 6px;border-radius:4px}
     .guides i{position:fixed;background:#FF3D8B}
     .cols i{position:fixed;background:rgba(255,61,90,.10)}
+    .cell{position:fixed;display:none}
+    .gm{position:fixed;z-index:2147483646;display:none;width:244px;padding:12px;background:#12151A;color:#fff;
+        border-radius:14px;font-size:13px;box-shadow:0 12px 30px -12px rgba(0,0,0,.55)}
+    .gm.on{display:grid;gap:12px}
+    .gm [hidden]{display:none}
+    .gm .seg{display:flex;gap:4px}
+    .gm .seg button{flex:1;border:0;border-radius:8px;padding:8px 10px;background:#1E232A;color:#fff;font-size:13px}
+    .gm .seg button.on{background:#25303F;box-shadow:inset 0 0 0 1px #4C8DFF}
+    .gm label{display:grid;grid-template-columns:1fr 34px;gap:4px 8px;align-items:center;color:#98A0A8}
+    .gm label span{grid-column:1/-1}
+    .gm input{width:100%;margin:0;accent-color:#4C8DFF}
+    .gm output{text-align:right;color:#fff;font-variant-numeric:tabular-nums}
+    .gm .off{display:flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:8px;padding:9px 10px;
+             background:transparent;color:#fff;box-shadow:inset 0 0 0 1px #363C44;font-size:13px}
+    .gm .off:hover{background:#232830}
 
     .ph{position:fixed;inset:0;z-index:2147483647;display:none;align-items:center;justify-content:center;
         background:rgba(18,21,26,.6)}
@@ -834,13 +854,16 @@
     const k = t => '<kbd>' + t + '</kbd>';
     const ARROW = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
       'stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg>';
+    const EYE_OFF = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+      'stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.2-4.5 6-4.5S14 8 14 8s-2.2 4.5-6 4.5S2 8 2 8z"/>' +
+      '<circle cx="8" cy="8" r="1.8"/><path d="M2.5 13.5l11-11"/></svg>';
     const host = document.createElement('pravki-ui');
     // Хост вне body: обход текстовых блоков его не видит.
     document.documentElement.appendChild(host);
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = '<style>' + UI_CSS + '</style>' +
       '<div class="w">' +
-        '<div class="ov"><div class="cols" id="cols"></div><div class="hov" id="hov"></div>' +
+        '<div class="ov"><div class="cols" id="cols"></div><div class="cell" id="cell"></div><div class="hov" id="hov"></div>' +
           '<div class="guides" id="guides"></div>' +
           '<div class="box" id="box"><div class="hdl" id="hdl" title="Тяните, чтобы поменять размер"></div></div>' +
           '<div class="dim" id="dim"></div></div>' +
@@ -850,10 +873,17 @@
           '<button class="ic" id="undo" title="Назад · ' + CMD + ' + Z" aria-label="Назад" disabled>' + ARROW + '</button>' +
           '<button class="ic" id="redo" title="Вперёд · Shift + ' + CMD + ' + Z" aria-label="Вперёд" disabled>' +
             ARROW.replace('<svg ', '<svg style="transform:scaleX(-1)" ') + '</button>' +
-          '<button id="gridBtn" title="Колонки, к ним прилипает при перетаскивании">Сетка</button>' +
+          '<button id="gridBtn" title="Клетка или колонки, края встают по ним">Сетка</button>' +
           '<button id="phoneBtn" title="Страница с правками шириной 390 px">Телефон</button>' +
           '<button id="list">Список</button>' +
           '<button class="go" id="copy">Скопировать правки</button>' +
+        '</div>' +
+        '<div class="gm" id="gm">' +
+          '<div class="seg"><button data-g="cell">Клетка</button><button data-g="cols">Колонки</button></div>' +
+          '<label id="gStepL"><span>Шаг клетки, px</span><input type="range" id="gStep" min="4" max="48" step="2"><output></output></label>' +
+          '<label id="gColsL"><span>Колонок</span><input type="range" id="gCols" min="2" max="24" step="1"><output></output></label>' +
+          '<label id="gGutL"><span>Промежуток, px</span><input type="range" id="gGut" min="0" max="64" step="4"><output></output></label>' +
+          '<button class="off" id="gOff">' + EYE_OFF + 'Скрыть сетку</button>' +
         '</div>' +
         '<aside class="side" id="side">' +
           '<div class="hd"><b>Правки</b>' +
@@ -876,7 +906,7 @@
             '<p><b>Текст.</b> Двойной щелчок или ' + k('Enter') + ' у выбранного, правьте прямо на странице. ' + k('Esc') + ' заканчивает</p>' +
             '<p><b>Замечание к чему угодно.</b> ' + k('Alt') + ' + щелчок. С ' + k('Shift') + ' берётся блок уровнем выше. Пока ' + k('Alt') + ' зажат, жёлтая рамка показывает, что возьмётся</p>' +
             '<p><b>Назад и вперёд.</b> Стрелки на панели или ' + k(CMD) + ' + ' + k('Z') + ' и ' + k('Shift') + ' + ' + k(CMD) + ' + ' + k('Z') + '</p>' +
-            '<p><b>Сетка.</b> Показывает колонки режима, по умолчанию 12 по ширине ближайшего широкого блока. Пока она включена, края встают только по колонкам</p>' +
+            '<p><b>Сетка.</b> Кнопка показывает сетку и открывает меню: клетка или колонки, размеры ползунками. Пока сетка видна, края встают по ней. «Скрыть сетку» убирает её</p>' +
             '<p><b>Телефон.</b> Страница с правками шириной 390 px, как на телефоне</p>' +
             '<p><b>Неразрывный пробел.</b> ' + k('Alt') + ' + пробел или ' + k('Ctrl') + ' + ' + k('Shift') + ' + пробел. <b>Перенос строки.</b> ' + k('Enter') + '</p>' +
             '<p><b>Отдать ИИ.</b> «Скопировать правки» и вставить в чат одним сообщением</p>' +
@@ -901,7 +931,7 @@
       host, root, cnt: $('cnt'), side: $('side'), items: $('items'), pages: $('pages'),
       lbl: $('lbl'), toast: $('toast'), help: $('help'), modal: $('modal'), mtext: $('mtext'),
       box: $('box'), hdl: $('hdl'), hov: $('hov'), dim: $('dim'), guides: $('guides'), cols: $('cols'),
-      undo: $('undo'), redo: $('redo'), gridBtn: $('gridBtn'), ph: $('ph'), phf: $('phf'),
+      undo: $('undo'), redo: $('redo'), gridBtn: $('gridBtn'), gm: $('gm'), cell: $('cell'), ph: $('ph'), phf: $('phf'),
     };
     $('mclose').addEventListener('click', () => ui.modal.classList.remove('on'));
     ui.modal.addEventListener('keydown', e => { if (e.key === 'Escape') ui.modal.classList.remove('on'); });
@@ -925,11 +955,25 @@
     $('reveal').addEventListener('click', () => toast('Показано скрытых блоков: ' + reveal()));
     $('undo').addEventListener('click', undo);
     $('redo').addEventListener('click', redo);
+    // Первое нажатие показывает сетку и меню, следующие открывают и закрывают меню
     $('gridBtn').addEventListener('click', () => {
-      gridOn = !gridOn;
-      ui.gridBtn.classList.toggle('on', gridOn);
-      if (!gridOn) ui.cols.textContent = '';
+      if (!gridOn) { gridOn = true; ui.gm.classList.add('on'); }
+      else ui.gm.classList.toggle('on');
+      paintGridMenu();
       loop();
+    });
+    ui.gm.addEventListener('click', e => {
+      const b = e.target.closest('[data-g]');
+      if (b) { gridPref.type = b.dataset.g; saveGrid(); }
+    });
+    for (const [id, key] of [['gStep', 'step'], ['gCols', 'cols'], ['gGut', 'gutter']]) {
+      $(id).addEventListener('input', e => { gridPref[key] = +e.target.value; saveGrid(); });
+    }
+    $('gOff').addEventListener('click', () => {
+      gridOn = false;
+      ui.gm.classList.remove('on');
+      hideGrid();
+      paintGridMenu();
     });
     $('phoneBtn').addEventListener('click', phone);
     $('phx').addEventListener('click', closePhone);
@@ -955,7 +999,7 @@
   // Адрес другой страницы сайта. У страниц, открытых файлом, в записи только имя файла из той же папки.
   const pageURL = p => location.protocol === 'file:'
     ? location.href.replace(/[^/]*([?#].*)?$/, '') + encodeURIComponent(p)
-    : '/' + p.split('/').map(encodeURIComponent).join('/');
+    : (CFG.baseURL || '/') + p.split('/').map(encodeURIComponent).join('/');
 
   function toast(msg) {
     if (!ui) return;
@@ -1113,6 +1157,9 @@
   let drag = null;
   let suppressClick = false;
   let gridOn = false;
+  // Вид и размеры сетки из меню. Браузер помнит их для всех страниц
+  const GRID_KEY = 'pravki:grid';
+  const gridPref = (() => { try { return JSON.parse(localStorage.getItem(GRID_KEY)) || {}; } catch { return {}; } })();
   let guides = [];
   let raf = 0;
   const SNAP = 6;             // экранные пиксели, с которых край прилипает
@@ -1180,7 +1227,7 @@
     if (!sel) {
       ui.box.style.display = 'none';
       ui.dim.style.display = 'none';
-      if (!gridOn) ui.cols.textContent = '';
+      if (!gridOn) hideGrid();
     } else showLabel(null);
     loop();
   }
@@ -1233,12 +1280,22 @@
     if (!fr && el) {
       fr = el.parentElement;
       while (fr && fr !== document.body && fr.getBoundingClientRect().width < innerWidth * 0.6) fr = fr.parentElement;
+      // Клетка держится за самый внешний кадр того же масштаба, чтобы не прыгала от блока к блоку
+      if (fr && fr !== document.body && (gridPref.type || g.type || 'cell') === 'cell') {
+        const k0 = scaleOf(fr) || 1;
+        for (let up = fr.parentElement; up && up !== document.body && up !== document.documentElement; up = up.parentElement) {
+          if (Math.abs((scaleOf(up) || 1) - k0) > 0.001) break;
+          fr = up;
+        }
+      }
     }
     if (!fr || fr === document.documentElement) fr = document.body;
     const rect = fr.getBoundingClientRect(), k = scaleOf(fr) || 1, cs = getComputedStyle(fr);
     const padL = g.margin != null ? g.margin : parseFloat(cs.paddingLeft) || 0;
     const padR = g.margin != null ? g.margin : parseFloat(cs.paddingRight) || 0;
-    const cols = g.cols || 12, gut = g.gutter != null ? g.gutter : 24, row = g.row || 8;
+    const cols = gridPref.cols || g.cols || 12, row = g.row || 8;
+    const gut = gridPref.gutter != null ? gridPref.gutter : g.gutter != null ? g.gutter : 24;
+    const type = gridPref.type || g.type || 'cell', step = gridPref.step || g.step || 8;
     const cw = (rect.width / k - padL - padR - (cols - 1) * gut) / cols;
     const starts = [], ends = [];
     for (let i = 0; i < cols; i++) {
@@ -1246,7 +1303,7 @@
       starts.push(s);
       ends.push(s + cw * k);
     }
-    return { rect, starts, ends, row: row * k, rowLocal: row, top: rect.top };
+    return { rect, starts, ends, row: row * k, rowLocal: row, top: rect.top, type, step: step * k, stepLocal: step };
   }
 
   function gridTarget() {
@@ -1255,11 +1312,56 @@
     return c && c !== ui.host ? c : document.body;
   }
 
+  function hideGrid() {
+    ui.cols.textContent = '';
+    ui.cell.style.display = 'none';
+  }
+
+  function saveGrid() {
+    try { localStorage.setItem(GRID_KEY, JSON.stringify(gridPref)); } catch {}
+    paintGridMenu();
+    loop();
+  }
+
+  // Меню над кнопкой «Сетка»: вид, ползунки для него и «Скрыть сетку»
+  function paintGridMenu() {
+    const g = CFG.grid || {}, $ = id => ui.gm.querySelector('#' + id);
+    const type = gridPref.type || g.type || 'cell';
+    ui.gridBtn.classList.toggle('on', gridOn);
+    for (const b of ui.gm.querySelectorAll('[data-g]')) b.classList.toggle('on', b.dataset.g === type);
+    $('gStepL').hidden = type !== 'cell';
+    $('gColsL').hidden = $('gGutL').hidden = type !== 'cols';
+    const val = { gStep: gridPref.step || g.step || 8, gCols: gridPref.cols || g.cols || 12,
+      gGut: gridPref.gutter != null ? gridPref.gutter : g.gutter != null ? g.gutter : 24 };
+    for (const id in val) { $(id).value = val[id]; $(id).nextElementSibling.textContent = val[id]; }
+    const r = ui.gridBtn.getBoundingClientRect();
+    ui.gm.style.left = Math.max(8, Math.min(r.left - 12, innerWidth - 252)) + 'px';
+    ui.gm.style.bottom = (innerHeight - r.top + 8) + 'px';
+  }
+
   function paintGrid() {
     if (!gridOn) return;
     const G = gridFor(gridTarget());
     const top = Math.max(0, G.rect.top), bottom = Math.min(innerHeight, G.rect.bottom);
     const box = ui.cols;
+    if (G.type === 'cell') {
+      // Клетка одним слоем: тонкие линии с шагом и яркие через восемь клеток, от угла кадра
+      box.textContent = '';
+      const left = Math.max(0, G.rect.left), right = Math.min(innerWidth, G.rect.right);
+      const s = G.step, b = s * 8, mod = (a, m) => ((a % m) + m) % m;
+      const line = (dir, a) => 'linear-gradient(to ' + dir + ',rgba(255,61,90,' + a + ') 1px,transparent 1px)';
+      const layers = [[line('right', .32), b], [line('bottom', .32), b]];
+      if (s >= 4) layers.push([line('right', .14), s], [line('bottom', .14), s]);
+      Object.assign(ui.cell.style, {
+        display: 'block', left: left + 'px', top: top + 'px',
+        width: Math.max(0, right - left) + 'px', height: Math.max(0, bottom - top) + 'px',
+        backgroundImage: layers.map(l => l[0]).join(','),
+        backgroundSize: layers.map(l => l[1] + 'px ' + l[1] + 'px').join(','),
+        backgroundPosition: layers.map(l => mod(G.rect.left - left, l[1]) + 'px ' + mod(G.rect.top - top, l[1]) + 'px').join(','),
+      });
+      return;
+    }
+    ui.cell.style.display = 'none';
     while (box.children.length < G.starts.length) box.appendChild(document.createElement('i'));
     while (box.children.length > G.starts.length) box.lastChild.remove();
     G.starts.forEach((s, i) => Object.assign(box.children[i].style, {
@@ -1311,7 +1413,17 @@
     return best;
   }
 
+  // К клетке встаёт ближний край: левый или правый, верх или низ
+  function cellSnap(a, b, o, s) {
+    const da = o + Math.round((a - o) / s) * s - a, db = o + Math.round((b - o) / s) * s - b;
+    return Math.abs(da) <= Math.abs(db) ? { d: da, first: true } : { d: db, first: false };
+  }
+
   function gridSnapX(R, G) {
+    if (G.type === 'cell') {
+      const c = cellSnap(R.l, R.l + R.w, G.rect.left, G.step);
+      return { d: c.d, text: (c.first ? 'левый' : 'правый') + ' край по клетке ' + G.stepLocal + ' px сетки режима' };
+    }
     let best = null;
     G.starts.forEach((s, c) => {
       const d = s - R.l;
@@ -1324,6 +1436,10 @@
     return best;
   }
   function gridSnapY(R, G) {
+    if (G.type === 'cell') {
+      const c = cellSnap(R.t, R.t + R.h, G.rect.top, G.step);
+      return { d: c.d, text: (c.first ? 'верх' : 'низ') + ' по клетке ' + G.stepLocal + ' px сетки режима' };
+    }
     const y = R.t - G.top;
     return { d: Math.round(y / G.row) * G.row - y, text: 'верх по шагу ' + G.rowLocal + ' px сетки режима' };
   }
@@ -1426,7 +1542,10 @@
       if (!(ev.metaKey || ev.ctrlKey)) {
         const sx = snapAxis([right, right, right], rs.targets, true);
         if (sx && sx.i !== 1) { right += sx.d; snaps.push(sx.text.replace(/^левый край|^правый край/, 'правый край')); guides.push({ x: sx.at, a: Math.min(rs.rect.top, sx.T.t), b: Math.max(bottom, sx.T.b) }); }
-        else if (rs.grid) {
+        else if (rs.grid && rs.grid.type === 'cell') {
+          const o = rs.grid.rect.left, s = rs.grid.step;
+          right = o + Math.round((right - o) / s) * s;
+        } else if (rs.grid) {
           let best = null;
           rs.grid.ends.concat(rs.grid.starts).forEach(s => { if (best == null || Math.abs(s - right) < Math.abs(best - right)) best = s; });
           if (best != null) right = best;
@@ -1434,6 +1553,7 @@
         if (!rs.media && !rs.text) {
           const sy = snapAxis([bottom, bottom, bottom], rs.targets, false);
           if (sy && sy.i !== 1) { bottom += sy.d; snaps.push(sy.text.replace(/^верх|^низ/, 'низ')); guides.push({ y: sy.at, a: Math.min(rs.rect.left, sy.T.l), b: Math.max(right, sy.T.r) }); }
+          else if (rs.grid && rs.grid.type === 'cell') { const o = rs.grid.rect.top, s = rs.grid.step; bottom = o + Math.round((bottom - o) / s) * s; }
         }
       }
       const w = Math.max(16, Math.round(rs.w + (right - rs.rect.right) / rs.ks));
@@ -1615,6 +1735,7 @@
           if (ev.code === 'KeyY' || ev.shiftKey) redo(); else undo();
           return;
         }
+        if (ev.key === 'Escape' && ui.gm.classList.contains('on')) { ui.gm.classList.remove('on'); return; }
         if (ev.key === 'Escape' && ui.ph.classList.contains('on')) { closePhone(); return; }
         if (!sel || mod || ev.altKey) return;
         const step = ev.shiftKey ? 10 : 1;
@@ -1667,6 +1788,7 @@
     }, true);
 
     window.addEventListener('pointerdown', ev => {
+      if (!fromUI(ev)) ui.gm.classList.remove('on');
       if (ev.button !== 0 || ev.altKey || ev.pointerType === 'touch' || fromUI(ev)) return;
       const ed = editingEl();
       if (ed && ed.contains(ev.target)) return;
@@ -1763,6 +1885,7 @@
   /* ---------- запуск ---------- */
 
   async function loadPages() {
+    if (CFG.pagesList) { pagesList = CFG.pagesList; return; }
     if (!CFG.server) return;
     try {
       const res = await fetch('/__pravki/pages', { cache: 'no-store' });
@@ -1771,6 +1894,13 @@
   }
 
   function start() {
+    // В плеере «Ролик из HTML» свои правки: со сценой и моментом, поверх кадра,
+    // который код перерисовывает каждый миг. Закладка и сервер включают их.
+    if (window.reelPlayer && typeof window.reelPlayer.edit === 'function') {
+      window.__pravki = { reel: true, text: window.reelPlayer.edits };
+      window.reelPlayer.edit(true);
+      return;
+    }
     if (CFG.freeze) freeze();
     mountUI();
     if (CFG.reveal) reveal();
