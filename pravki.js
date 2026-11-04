@@ -57,6 +57,7 @@
   const PREVIEW = window.top !== window && /pravki-preview/.test(location.hash);
   if (window.top !== window && !PREVIEW) return;
   window.__pravki = { loading: true };
+  const LATE = document.readyState === 'complete';
 
   const CFG = Object.assign({ sources: {}, pages: {}, skip: [] }, window.PRAVKI_CONFIG || {});
   const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -108,9 +109,9 @@
   }
   function saveAll() { if (!PREVIEW) try { localStorage.setItem(KEY, JSON.stringify(store)); } catch {} }
 
-  /* Запись живая, если в ней есть правка текста, сдвиг или непустое замечание. */
+  /* Запись живая, если в ней есть правка текста, сдвиг, удаление блока или непустое замечание. */
   const hasMove = r => !!(r.move && (r.move.dx || r.move.dy || r.move.w != null || r.move.h != null));
-  const live = r => r.after !== r.before || hasMove(r) || !!(r.note && r.note.trim());
+  const live = r => r.after !== r.before || hasMove(r) || !!r.del || !!(r.note && r.note.trim());
   const liveRecs = p => Object.values((store.pages[p] || {}).recs || {}).filter(live);
   const total = () => Object.keys(store.pages).reduce((n, p) => n + liveRecs(p).length, 0);
   const clone = o => o ? JSON.parse(JSON.stringify(o)) : null;
@@ -376,6 +377,26 @@
   }
   function clearMove(el) { if (el._pvStyle) applyMove(el, null); }
 
+  /* Убранный блок: в режиме бледный с красным пунктиром, когда режим скрыт глазом, его нет совсем */
+  function applyDel(el, on) { if (on) el.dataset.pvDel = '1'; else delete el.dataset.pvDel; }
+  function setDel(el, on) {
+    const r = ensureRec(el);
+    if (on) { r.del = true; if (r.kind === 'note') r.fp = describe(el); } else { delete r.del; delete r.fp; }
+    applyDel(el, on);
+    if (!live(r)) {
+      delete recs()[r.addr];
+      if (el.dataset.pvKind === 'note') unmark(el);
+    } else r.pos = posOf(el);
+    save();
+    render();
+  }
+  function toggleDel(el) {
+    const was = !!(recOf(el) || {}).del;
+    setDel(el, !was);
+    pushHist({ type: 'del', el, before: was, after: !was, t: Date.now() });
+    toast(was ? 'Блок вернулся' : 'Блок убран. Delete ещё раз или ' + CMD + ' + Z вернёт его');
+  }
+
   /* Где элемент стоит сам по себе, относительно родителя, в его пикселях.
      Меряем до сдвига: по этому числу потом видно, внесли ли сдвиг в файлы. */
   function natPos(el) {
@@ -426,8 +447,12 @@
       if (r.kind === 'note') {
         let el = null;
         try { el = r.sel && document.querySelector(r.sel); } catch {}
+        // Блок убрали из файлов: на его месте теперь другой, запись выполнена
+        if (el && r.del && r.fp && describe(el) !== r.fp) el = null;
+        if (!el && r.del) { delete rs[r.addr]; applied++; continue; }
         if (el && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) {
           markNote(el, r.addr);
+          if (r.del) applyDel(el, true);
           if (r.note && r.note.trim()) el.dataset.pvNote = '1';
           delete r.lost;
           if (r.move && settleMove(el, r)) applied++;
@@ -449,8 +474,10 @@
           el = found;
         } else el = null;
       }
+      if (!el && r.del) { delete rs[r.addr]; applied++; continue; }
       if (!el) { r.lost = true; continue; }
       delete r.lost;
+      if (r.del) applyDel(el, true);
       if (r.after !== r.before && el._pvBefore === r.after) {
         // Текст уже в файлах: правка и замечание к ней сделаны, сдвиг проверяем отдельно.
         r.before = r.after;
@@ -483,6 +510,7 @@
       note: old ? old.note || '' : '', src: srcHint(el), pos: posOf(el),
     };
     if (old && old.move) r.move = old.move;
+    if (old && old.del) r.del = true;
     if (live(r)) rs[addr] = r; else delete rs[addr];
     if (changed) el.dataset.pvChanged = '1'; else delete el.dataset.pvChanged;
     save();
@@ -531,6 +559,7 @@
     if (el) {
       delete el.dataset.pvChanged;
       delete el.dataset.pvNote;
+      delete el.dataset.pvDel;
       clearMove(el);
       if (el.dataset.pvKind === 'note') unmark(el);
       else if (r && r.after !== r.before && el._pvBeforeHTML !== undefined) el.innerHTML = el._pvBeforeHTML;
@@ -616,6 +645,7 @@
           out.push('  ' + forOut(r.before));
         }
         if (r.where) out.push('  где: ' + r.where);
+        if (r.del) out.push('  удалить: блок целиком');
         if (r.move) for (const [k, v] of moveWords(r.move)) out.push('  ' + k + ': ' + v);
         if (r.note && r.note.trim()) out.push('! ' + r.note.trim().replace(/\n+/g, '\n! '));
         out.push('');
@@ -702,17 +732,19 @@
   /* ---------- интерфейс ---------- */
 
   const PAGE_CSS = `
-    [data-pv-addr]{outline:1px dashed transparent;outline-offset:3px;transition:outline-color .12s,background-color .12s}
-    [data-pv-addr]:not([data-pv-kind]):hover{outline-color:#7FA98A;background-color:rgba(33,160,56,.08)}
-    [data-pv-ce]:not(:focus){cursor:default}
-    [data-pv-addr]:focus{outline:2px solid #21A038!important;outline-offset:3px;background-color:rgba(33,160,56,.12)}
-    [data-pv-changed]{outline:1px solid #21A038;background-color:rgba(33,160,56,.16)}
-    [data-pv-note]{outline:1px solid #E0C400;background-color:rgba(224,196,0,.20)}
-    [data-pv-kind="note"]:not([data-pv-moved]){outline:2px solid #E0C400;outline-offset:2px;background-color:rgba(224,196,0,.08)}
-    [data-pv-moved]:not([data-pv-note]):not([data-pv-changed]):not(:focus){outline:1px solid rgba(76,141,255,.75);outline-offset:2px}
-    [data-pv-hover]{outline:2px solid #E0C400!important;outline-offset:2px;cursor:crosshair!important}
-    [data-pv-sel]:not(:focus):not([data-pv-hover]){outline-color:transparent!important}
-    [data-pv-flash]{animation:pvflash 1.1s ease-out}
+    html:not([data-pv-off]) [data-pv-addr]{outline-offset:3px;transition:background-color .12s}
+    html:not([data-pv-off]) [data-pv-addr]:not([data-pv-kind]):hover{outline:1px dashed #7FA98A;background-color:rgba(33,160,56,.08)}
+    html:not([data-pv-off]) [data-pv-ce]:not(:focus){cursor:default}
+    html:not([data-pv-off]) [data-pv-addr]:focus{outline:2px solid #21A038!important;outline-offset:3px;background-color:rgba(33,160,56,.12)}
+    html:not([data-pv-off]) [data-pv-changed]{outline:1px solid #21A038;background-color:rgba(33,160,56,.16)}
+    html:not([data-pv-off]) [data-pv-note]{outline:1px solid #E0C400;background-color:rgba(224,196,0,.20)}
+    html:not([data-pv-off]) [data-pv-kind="note"]:not([data-pv-moved]){outline:2px solid #E0C400;outline-offset:2px;background-color:rgba(224,196,0,.08)}
+    html:not([data-pv-off]) [data-pv-moved]:not([data-pv-note]):not([data-pv-changed]):not(:focus){outline:1px solid rgba(76,141,255,.75);outline-offset:2px}
+    html:not([data-pv-off]) [data-pv-hover]{outline:2px solid #E0C400!important;outline-offset:2px;cursor:crosshair!important}
+    html:not([data-pv-off]) [data-pv-sel]:not(:focus):not([data-pv-hover]){outline-color:transparent!important}
+    html:not([data-pv-off]) [data-pv-flash]{animation:pvflash 1.1s ease-out}
+    html:not([data-pv-off]) [data-pv-del]{opacity:.28!important;outline:1px dashed #E5484D!important;outline-offset:2px}
+    html[data-pv-off] [data-pv-del]{display:none!important}
     html[data-pv-dragging],html[data-pv-dragging] *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
     @keyframes pvflash{0%,100%{box-shadow:0 0 0 0 rgba(33,160,56,0)}18%{box-shadow:0 0 0 10px rgba(33,160,56,.32)}}
   `;
@@ -742,15 +774,19 @@
     .bar button.ic{width:34px;padding:0;justify-content:center}
     .bar button[disabled]{opacity:.35;cursor:default;background:transparent}
     .bar button.on{background:#25303F;color:#8FB6FF}
-    .bar button.go{background:#21A038;font-weight:600;padding:0 16px}
-    .bar button.go:hover{background:#26B140}
-    .bar.min .full{display:none}
+    /* Главное действие голубое, как в дизайн-системе: blue/400 палитры, при наведении #0090DB */
+    .bar button.go{background:#1F9EEB;font-weight:600;padding:0 16px}
+    .bar button.go:hover{background:#0090DB}
     .bar.wrap{border-radius:22px}
     @media (max-width:820px){
       .bar .lb,.bar .t{display:none}
       .bar button.full:not(.ic):not(.go){width:34px;padding:0;justify-content:center}
     }
-    .bar.min #fold svg{transform:rotate(180deg)}
+    .bar .mute{color:#98A0A8;font-weight:500}
+    .bar button.offlbl{display:none;padding:0 8px 0 2px;color:#C9CED4}
+    .bar button.offlbl:hover{background:transparent;color:#fff}
+    .bar.off button.offlbl{display:inline-flex}
+    .bar.off > :not(#offBtn):not(#undo):not(#redo):not(.offlbl){display:none}
 
     .side{position:fixed;top:0;right:0;bottom:0;width:min(400px,100vw);z-index:2147483645;display:none;
           flex-direction:column;background:#FAFBFC;border-left:1px solid #E4E7EA;
@@ -760,9 +796,28 @@
     .hd b{font-size:15px;font-weight:600;margin-right:auto}
     .hd button,.tools button{font-size:13px;border:0;background:transparent;color:#5E666E;padding:6px 9px;border-radius:7px}
     .hd button:hover,.tools button:hover{background:#EDF0F2;color:#12151A}
-    .tools{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:8px 12px;border-bottom:1px solid #E4E7EA}
-    .tools select{font:inherit;font-size:13px;max-width:100%;flex:1 1 180px;padding:6px 8px;border:1px solid #E4E7EA;
-                  border-radius:8px;background:#fff;color:#12151A}
+    .hd .hb{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+    .bodyw{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+    .conf{position:absolute;inset:0;z-index:2;display:none;align-items:center;justify-content:center;padding:24px;
+          background:rgba(250,251,252,.62);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+    .conf.on{display:flex}
+    .cbox{text-align:center;max-width:280px}
+    .cbox p{margin:0 0 6px;font-size:15px;font-weight:600;color:#12151A}
+    .cbox .sub{margin:0 0 16px;font-size:13px;font-weight:400;color:#5E666E}
+    .crow{display:flex;gap:8px;justify-content:center}
+    .crow button{border:0;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600}
+    .crow .cyes{background:#E5484D;color:#fff}
+    .crow .cyes:hover{background:#D63F44}
+    .crow .cno{background:#EDF0F2;color:#12151A}
+    .crow .cno:hover{background:#E4E7EA}
+    .side.helpon .list{display:none}
+    .tools{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #E4E7EA}
+    .tools select{flex:1 1 auto;min-width:0;height:32px;font:inherit;font-size:13px;padding:0 30px 0 10px;
+                  border:1px solid #E4E7EA;border-radius:8px;color:#12151A;-webkit-appearance:none;appearance:none;
+                  text-overflow:ellipsis;white-space:nowrap;overflow:hidden;cursor:pointer;
+                  background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5l3-3' fill='none' stroke='%235E666E' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center}
+    .tools select:hover{border-color:#C9CED4}
+    .tools button{flex:none}
     .list{flex:1;overflow:auto;padding:10px;overscroll-behavior:contain}
     .empty{padding:26px 14px;color:#7A8189;text-align:center;line-height:1.6}
     .grp{font-size:12px;color:#7A8189;font-weight:600;padding:12px 4px 6px}
@@ -792,10 +847,14 @@
              border:1px solid #E4E7EA;border-radius:8px;padding:8px 10px;resize:vertical;min-height:38px;margin-top:4px}
     textarea:focus{outline:0;border-color:#21A038}
     textarea::placeholder{color:#AEB5BB}
-    .help{border-top:1px solid #E4E7EA;padding:12px 16px;font-size:13px;line-height:1.55;color:#454C52;display:none;
-          max-height:55vh;overflow:auto}
+    .help{flex:1;min-height:0;padding:12px 12px 16px 16px;font-size:13px;line-height:1.45;color:#454C52;display:none;
+          overflow:auto;background:#fff}
     .help.on{display:block}
-    .help p{margin:0 0 6px}
+    .help .hh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    .help .hh b{font-size:14px;color:#12151A}
+    .help .keys{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;align-items:baseline}
+    .help .keys span:nth-child(odd){white-space:nowrap;color:#12151A}
+    .help .foot{margin:12px 0 0;color:#7A8189}
     kbd{font:500 11px/1 ui-monospace,Menlo,monospace;background:#EDF0F2;padding:3px 6px;border-radius:5px;color:#12151A}
 
     .lbl{position:fixed;z-index:2147483647;pointer-events:none;display:none;max-width:60vw;overflow:hidden;
@@ -803,8 +862,18 @@
          background:#12151A;padding:4px 6px;border-radius:4px}
     .lbl.alt{background:#8A6A00}
     .toast{position:fixed;left:50%;bottom:72px;transform:translateX(-50%) translateY(10px);z-index:2147483647;
-           background:#12151A;color:#fff;padding:11px 18px;border-radius:999px;font-size:13px;font-weight:500;
+           background:#12151A;color:#fff;padding:11px 16px;border-radius:12px;font-size:13px;font-weight:500;
            opacity:0;pointer-events:none;max-width:90vw}
+    .note{position:absolute;left:50%;bottom:calc(100% + 10px);z-index:2;display:none;align-items:flex-start;gap:12px;width:max-content;
+          max-width:min(440px,calc(100vw - 32px));padding:12px 8px 12px 16px;background:#12151A;color:#fff;border-radius:12px;
+          font-size:13px;font-weight:400;line-height:1.45;transform:translateX(-50%);white-space:normal;
+          box-shadow:0 0 0 1px rgba(255,255,255,.08),0 12px 30px -12px rgba(0,0,0,.55)}
+    .note.on{display:flex}
+    .note span{padding-top:2px}
+    .bar.low .note{bottom:auto;top:calc(100% + 10px)}
+    .note .nx{flex:none;width:26px;height:26px;padding:0;border:0;border-radius:7px;background:transparent;color:#98A0A8;
+              display:inline-flex;align-items:center;justify-content:center}
+    .note .nx:hover{background:#232830;color:#fff}
     .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 
     .ov{position:fixed;inset:0;pointer-events:none;z-index:2147483644}
@@ -867,14 +936,16 @@
     const ARROW = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
       'stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg>';
     // Значки панели
-    const ICONS = {
+    ICONS = {
       grid: '<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M6.2 2.5v11M9.8 2.5v11M2.5 6.2h11M2.5 9.8h11"/>',
       phone: '<rect x="4.5" y="1.8" width="7" height="12.4" rx="1.6"/><path d="M7.2 12h1.6"/>',
       list: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.8" cy="4" r=".6"/><circle cx="2.8" cy="8" r=".6"/><circle cx="2.8" cy="12" r=".6"/>',
-      down: '<path d="M3.5 6l4.5 4.5L12.5 6"/>',
+      eye: '<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>',
+      eyeOff: '<path d="M2 7.5s2.2 3 6 3 6-3 6-3"/><path d="M4.2 9.6 3 11.2M8 10.5v2M11.8 9.6l1.2 1.6"/>',
+      x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+      help: '<circle cx="8" cy="8" r="6"/><path d="M6.4 6.3a1.7 1.7 0 0 1 3.2.6c0 1.1-1.6 1.4-1.6 2.4"/><path d="M8 11.4v.1"/>',
     };
-    const ICON = n => '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
-      'stroke-linecap="round" stroke-linejoin="round">' + ICONS[n] + '</svg>';
+
     const EYE_OFF = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
       'stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.2-4.5 6-4.5S14 8 14 8s-2.2 4.5-6 4.5S2 8 2 8z"/>' +
       '<circle cx="8" cy="8" r="1.8"/><path d="M2.5 13.5l11-11"/></svg>';
@@ -889,6 +960,9 @@
           '<div class="box" id="box"><div class="hdl" id="hdl" title="Тяните, чтобы поменять размер"></div></div>' +
           '<div class="dim" id="dim"></div></div>' +
         '<div class="bar" id="bar">' +
+          '<button class="ic" id="offBtn" title="Скрыть режим правок: рамок не видно, правки остаются, ссылки открываются" aria-label="Скрыть режим правок">' +
+            ICON('eye') + '</button>' +
+          '<button class="offlbl" id="offLbl" title="Показать режим правок">Режим правок скрыт</button>' +
           '<div class="hand" id="hand" title="Тяните, чтобы переставить панель. Двойной щелчок вернёт её вниз по центру">' +
             '<span class="dot"></span><span class="t">Режим правок</span><span class="n" id="cnt" title="Записей в правках">0</span></div>' +
           '<span class="sep full"></span>' +
@@ -900,7 +974,8 @@
           '<button class="full" id="phoneBtn" title="Страница с правками шириной 390 px">' + ICON('phone') + '<span class="lb">Телефон</span></button>' +
           '<button class="full" id="list">' + ICON('list') + '<span class="lb">Список</span></button>' +
           '<button class="go full" id="copy">Скопировать правки</button>' +
-          '<button class="ic" id="fold" title="Свернуть панель" aria-label="Свернуть панель">' + ICON('down') + '</button>' +
+          '<div class="note" id="note"><span id="noteText"></span>' +
+            '<button class="nx" id="noteX" title="Закрыть" aria-label="Закрыть">' + ICON('x') + '</button></div>' +
         '</div>' +
         '<div class="gm" id="gm">' +
           '<div class="seg"><button data-g="cell">Клетка</button><button data-g="cols">Колонки</button></div>' +
@@ -913,33 +988,36 @@
           '<div class="hd"><b>Правки</b>' +
             '<button id="file">Скачать файлом</button>' +
             '<button id="reset">Сбросить</button>' +
-            '<button id="hide" title="Закрыть">✕</button></div>' +
+            '<button class="hb" id="helpBtn" title="Клавиши и подсказки" aria-label="Клавиши и подсказки">' + ICON('help') + '</button>' +
+            '<button class="hb" id="hide" title="Закрыть список" aria-label="Закрыть список">' + ICON('x') + '</button></div>' +
           '<div class="tools">' +
-            '<select id="pages" hidden></select>' +
-            '<button id="reveal">Показать скрытое</button>' +
-            '<button id="helpBtn">Как это работает</button>' +
+            '<select id="pages" hidden title="Страница сайта"></select>' +
           '</div>' +
+          '<div class="bodyw">' +
           '<div class="list" id="items"></div>' +
+          '<div class="conf" id="conf"><div class="cbox"><p id="confText"></p><p class="sub" id="confSub"></p>' +
+            '<div class="crow"><button class="cyes" id="confYes">Сбросить</button><button class="cno" id="confNo">Отмена</button></div></div></div>' +
           '<div class="help" id="help">' +
-            '<p><b>Двигать.</b> Тяните мышью фото, блок или текст. Края прилипают к соседям, появляется розовая линия. ' +
-              'Всё внутри карточки тянет карточку целиком. Фото внутри карточки выбирает двойной щелчок, текст внутри карточки ' +
-              'двойной щелчок открывает для правки, а после ' + k('Esc') + ' он выбран и тянется отдельно. ' +
-              'С ' + k(CMD) + ' привязка отключается, с ' + k('Shift') + ' берётся блок уровнем выше. ' +
-              'Стрелки двигают выбранное на 1 px, с ' + k('Shift') + ' на 10</p>' +
-            '<p><b>Размер.</b> Тяните квадратик в правом нижнем углу выбранного. Фото держит пропорции, у текста меняется ширина</p>' +
-            '<p><b>Текст.</b> Двойной щелчок или ' + k('Enter') + ' у выбранного, правьте прямо на странице. ' + k('Esc') + ' заканчивает</p>' +
-            '<p><b>Замечание к чему угодно.</b> ' + k('Alt') + ' + щелчок. С ' + k('Shift') + ' берётся блок уровнем выше. Пока ' + k('Alt') + ' зажат, жёлтая рамка показывает, что возьмётся</p>' +
-            '<p><b>Назад и вперёд.</b> Стрелки на панели или ' + k(CMD) + ' + ' + k('Z') + ' и ' + k('Shift') + ' + ' + k(CMD) + ' + ' + k('Z') + '</p>' +
-            '<p><b>Сетка.</b> Кнопка показывает сетку и открывает меню: клетка или колонки, размеры ползунками. Пока сетка видна, края встают по ней. «Скрыть сетку» убирает её</p>' +
-            '<p><b>Телефон.</b> Страница с правками шириной 390 px, как на телефоне</p>' +
-            '<p><b>Панель.</b> Тяните за название, чтобы переставить. Двойной щелчок по названию вернёт её вниз по центру. Стрелка справа сворачивает и разворачивает</p>' +
-            '<p><b>Неразрывный пробел.</b> ' + (MAC ? k('Alt') + ' + пробел или ' : '') + k('Ctrl') + ' + ' + k('Shift') + ' + пробел. <b>Перенос строки.</b> ' + k('Enter') + '</p>' +
-            '<p><b>Отдать ИИ.</b> «Скопировать правки» и вставить в чат одним сообщением</p>' +
-            '<p style="color:#7A8189">Правки хранятся в этом браузере по каждой странице, страницу можно закрыть и вернуться. Сам сайт не меняется, режим ничего не отправляет в сеть. Ссылки в режиме правок не открываются, открыть можно с ' + k(CMD) + '</p>' +
+            '<div class="hh"><b>Клавиши</b><button class="x" id="helpX" title="Закрыть" aria-label="Закрыть">✕</button></div>' +
+            '<div class="keys">' +
+              '<span>Тянуть мышью</span><span>двигать фото и блоки, края прилипают к соседям</span>' +
+              '<span>' + k(CMD) + ' + тянуть</span><span>без привязки</span>' +
+              '<span>' + k('Shift') + ' + тянуть</span><span>взять блок уровнем выше</span>' +
+              '<span>Стрелки</span><span>сдвиг на 1 px, с ' + k('Shift') + ' на 10</span>' +
+              '<span>Двойной щелчок</span><span>править текст, ' + k('Esc') + ' закончить</span>' +
+              '<span>' + k('Ctrl') + ' + ' + k('Shift') + ' + пробел</span><span>неразрывный пробел' + (MAC ? ', или ' + k('Alt') + ' + пробел' : '') + '</span>' +
+              '<span>' + k('Alt') + ' + щелчок</span><span>замечание к чему угодно</span>' +
+              '<span>' + k(CMD) + ' + ' + k('Z') + '</span><span>назад, с ' + k('Shift') + ' вперёд</span>' +
+              '<span>' + k(CMD) + ' + щелчок</span><span>открыть ссылку или нажать кнопку</span>' +
+              '<span>' + k('Delete') + '</span><span>убрать выбранный блок, ещё раз вернуть</span>' +
+            '</div>' +
+            '<p class="foot">Правки хранятся в этом браузере, сайт не меняется. «Скопировать правки» отдаёт их ИИ одним сообщением</p>' +
+          '</div>' +
           '</div>' +
         '</aside>' +
         '<div class="lbl" id="lbl"></div>' +
         '<div class="toast" id="toast"></div>' +
+
         '<div class="ph" id="ph"><div class="phw">' +
           '<div class="phb"><span>Ширина телефона, 390 px. Сдвиги такие же, как на широком экране</span><button id="phx">Закрыть</button></div>' +
           '<iframe id="phf" title="Страница на ширине телефона"></iframe></div></div>' +
@@ -953,7 +1031,7 @@
 
     const $ = id => root.getElementById(id);
     ui = {
-      host, root, bar: $('bar'), hand: $('hand'), cnt: $('cnt'), side: $('side'), items: $('items'), pages: $('pages'),
+      host, root, bar: $('bar'), hand: $('hand'), cnt: $('cnt'), offBtn: $('offBtn'), note: $('note'), noteText: $('noteText'), side: $('side'), items: $('items'), pages: $('pages'),
       lbl: $('lbl'), toast: $('toast'), help: $('help'), modal: $('modal'), mtext: $('mtext'),
       box: $('box'), hdl: $('hdl'), hov: $('hov'), dim: $('dim'), guides: $('guides'), cols: $('cols'),
       undo: $('undo'), redo: $('redo'), gridBtn: $('gridBtn'), gm: $('gm'), cell: $('cell'), ph: $('ph'), phf: $('phf'),
@@ -976,8 +1054,12 @@
     $('file').addEventListener('click', download);
     $('list').addEventListener('click', () => { ui.side.classList.toggle('on'); render(); });
     $('hide').addEventListener('click', () => ui.side.classList.remove('on'));
-    $('helpBtn').addEventListener('click', () => ui.help.classList.toggle('on'));
-    $('reveal').addEventListener('click', () => toast('Показано скрытых блоков: ' + reveal()));
+    $('helpBtn').addEventListener('click', () => {
+      const on = !ui.help.classList.contains('on');
+      ui.help.classList.toggle('on', on);
+      ui.side.classList.toggle('helpon', on);
+      $('conf').classList.remove('on');
+    });
     $('undo').addEventListener('click', undo);
     $('redo').addEventListener('click', redo);
     // Первое нажатие показывает сетку и меню, следующие открывают и закрывают меню
@@ -1002,22 +1084,37 @@
     });
     $('phoneBtn').addEventListener('click', phone);
     $('phx').addEventListener('click', closePhone);
-    $('fold').addEventListener('click', () => { barPref.min = !barPref.min; placeBar(); saveBar(); });
+    $('offBtn').addEventListener('click', () => setHidden(!HIDDEN));
+    $('offLbl').addEventListener('click', () => setHidden(false));
+    $('helpX').addEventListener('click', () => { ui.help.classList.remove('on'); ui.side.classList.remove('helpon'); });
+    $('noteX').addEventListener('click', () => {
+      ui.note.classList.remove('on');
+      if (ui.note.dataset.hint) { try { localStorage.setItem(HINT_KEY, '1'); } catch {} }
+    });
     bindBarDrag();
     placeBar();
     typoNodes(root);
     new MutationObserver(() => typoNodes(ui.items)).observe(ui.items, { childList: true, subtree: true });
+    // Подтверждение поверх списка, с размытием: системные окна браузера часто не показываются
     $('reset').addEventListener('click', () => {
       const here = liveRecs(PAGE).length, all = total();
-      if (!all) return;
-      const msg = here && here !== all
-        ? 'Убрать ' + here + ' ' + plural(here) + ' этой страницы? На других останутся'
-        : (all === 1 ? 'Убрать 1 правку?' : 'Убрать все ' + all + ' ' + plural(all) + '?');
-      if (!confirm(msg)) return;
-      if (here && here !== all) Object.keys(recs()).forEach(drop);
+      if (!all) { toast('Сбрасывать нечего'); return; }
+      const onlyHere = here && here !== all;
+      ui.side.classList.remove('helpon');
+      ui.help.classList.remove('on');
+      $('confText').textContent = onlyHere ? 'Сбросить ' + here + ' ' + plural(here) + ' этой страницы?' : 'Точно сбросить все правки?';
+      $('confSub').textContent = onlyHere ? 'На других страницах правки останутся' : 'Их нельзя будет вернуть';
+      $('conf').dataset.here = onlyHere ? '1' : '';
+      $('conf').classList.add('on');
+    });
+    $('confNo').addEventListener('click', () => $('conf').classList.remove('on'));
+    $('confYes').addEventListener('click', () => {
+      const onlyHere = !!$('conf').dataset.here;
+      $('conf').classList.remove('on');
+      if (onlyHere) Object.keys(recs()).forEach(drop);
       else clearAll();
       select(null);
-      toast('Список очищен');
+      toast(onlyHere ? 'Правки этой страницы сброшены, на других остались' : 'Правки сброшены');
     });
     ui.pages.addEventListener('change', () => {
       const p = ui.pages.value;
@@ -1073,6 +1170,8 @@
     const known = new Set(list.map(p => p.path));
     const extra = Object.keys(store.pages).filter(p => !known.has(p) && liveRecs(p).length).map(path => ({ path }));
     const all = list.concat(extra);
+    // Строка со списком страниц нужна, только когда страниц больше одной
+    ui.pages.parentElement.style.display = all.length < 2 ? 'none' : '';
     if (all.length < 2) { ui.pages.hidden = true; return; }
     ui.pages.hidden = false;
     ui.pages.innerHTML = '';
@@ -1111,6 +1210,7 @@
         '<div class="ih"><button class="addr"></button>' +
         (r.kind === 'note' ? '<span class="tag blk">блок</span>' : '') +
         (r.src ? '<span class="tag src"></span>' : '') +
+        (r.del ? '<span class="tag lost">удалить</span>' : '') +
         (r.lost ? '<span class="tag lost">не нашёлся</span>' : '') +
         '<span class="sp"></span><button class="x" title="Убрать">✕</button></div>' +
         '<p class="was"></p><p class="now"></p>' +
@@ -1200,6 +1300,7 @@
   let drag = null;
   let suppressClick = false;
   let gridOn = false;
+  let HIDDEN = false;         // глаз: режим скрыт, правки видны, сайт работает как обычный
   // Вид и размеры сетки из меню. Браузер помнит их для всех страниц
   const GRID_KEY = 'pravki:grid';
   const gridPref = (() => { try { return JSON.parse(localStorage.getItem(GRID_KEY)) || {}; } catch { return {}; } })();
@@ -1355,27 +1456,81 @@
     return c && c !== ui.host ? c : document.body;
   }
 
-  /* Панель: внизу по центру, её можно перетащить за название и свернуть. Место и вид браузер помнит */
+  let ICONS = {};
+  const ICON = n => '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
+    'stroke-linecap="round" stroke-linejoin="round">' + ICONS[n] + '</svg>';
+
+  /* Режим скрыт глазом: помнится в этой вкладке, на других страницах сайта режим тоже скрыт. Закладка показывает его снова */
+  const OFF_KEY = 'pravki:off';
+  const isOff = () => { try { return sessionStorage.getItem(OFF_KEY) === '1'; } catch { return false; } };
+  function setOff(on) {
+    try { if (on) sessionStorage.setItem(OFF_KEY, '1'); else sessionStorage.removeItem(OFF_KEY); } catch {}
+  }
+  // Глаз: прячет рамки, подсветку и панель. Правки остаются на странице, ссылки и кнопки работают, назад и вперёд доступны
+  function setHidden(on) {
+    HIDDEN = !!on;
+    setOff(HIDDEN);
+    if (HIDDEN) document.documentElement.dataset.pvOff = '1'; else delete document.documentElement.dataset.pvOff;
+    const ed = editingEl();
+    if (ed) ed.blur();
+    for (const el of document.querySelectorAll('[data-pv-ce]')) {
+      if (HIDDEN) { if (el.hasAttribute('contenteditable')) el._pvCe = el.getAttribute('contenteditable'); el.removeAttribute('contenteditable'); }
+      else if (el._pvCe) el.setAttribute('contenteditable', el._pvCe);
+    }
+    drag = null;
+    hov = null;
+    setHover(null);
+    showLabel(null);
+    select(null);
+    if (HIDDEN) {
+      ui.side.classList.remove('on');
+      ui.gm.classList.remove('on');
+      ui.note.classList.remove('on');
+      if (gridOn) { gridOn = false; hideGrid(); paintGridMenu(); }
+      if (ui.ph.classList.contains('on')) closePhone();
+    }
+    ui.bar.classList.toggle('off', HIDDEN);
+    ui.offBtn.innerHTML = ICON(HIDDEN ? 'eyeOff' : 'eye');
+    ui.offBtn.title = HIDDEN ? 'Показать режим правок' : 'Скрыть режим правок: рамок не видно, правки остаются, ссылки открываются';
+    placeBar();
+    loop();
+  }
+
+  // Заметка над панелью: висит, пока её не закроют крестиком
+  const HINT_KEY = 'pravki:hint';
+  function note(msg, hint) {
+    ui.noteText.textContent = typo(msg);
+    if (hint) ui.note.dataset.hint = '1'; else delete ui.note.dataset.hint;
+    ui.note.classList.add('on');
+    placeNote();
+  }
+  // Заметка всегда по центру над панелью, и после того как окно поменяло размер
+  function placeNote() {
+    if (ui) ui.bar.classList.toggle('low', ui.bar.getBoundingClientRect().top < 160);
+  }
+
+  /* Панель: внизу по центру, её можно перетащить за название. Место браузер помнит */
   const BAR_KEY = 'pravki:bar';
   const barPref = (() => { try { return JSON.parse(localStorage.getItem(BAR_KEY)) || {}; } catch { return {}; } })();
   function saveBar() { try { localStorage.setItem(BAR_KEY, JSON.stringify(barPref)); } catch {} }
 
+  // Место панели помнится долями окна: после разворота окна она стоит там же относительно краёв
   function placeBar() {
     const b = ui.bar;
-    b.classList.toggle('min', !!barPref.min);
-    ui.fold = ui.fold || b.querySelector('#fold');
-    ui.fold.title = barPref.min ? 'Развернуть панель' : 'Свернуть панель';
-    if (barPref.x == null) { b.classList.remove('moved'); b.style.left = b.style.top = b.style.bottom = ''; }
+    delete barPref.x;
+    delete barPref.y;
+    if (barPref.fx == null) { b.classList.remove('moved'); b.style.left = b.style.top = b.style.bottom = ''; }
     else {
       b.classList.add('moved');
       const r = b.getBoundingClientRect();
-      const x = Math.max(8, Math.min(barPref.x, innerWidth - r.width - 8));
-      const y = Math.max(8, Math.min(barPref.y, innerHeight - r.height - 8));
+      const x = Math.max(8, Math.min(barPref.fx * innerWidth - r.width / 2, innerWidth - r.width - 8));
+      const y = Math.max(8, Math.min(barPref.fy * innerHeight - r.height / 2, innerHeight - r.height - 8));
       Object.assign(b.style, { left: x + 'px', top: y + 'px', bottom: 'auto' });
     }
     // Если панель не влезла в одну строку, скругляем её меньше, иначе она превращается в овал
     b.classList.remove('wrap');
     if (b.getBoundingClientRect().height > 52) b.classList.add('wrap');
+    placeNote();
   }
 
   function bindBarDrag() {
@@ -1393,21 +1548,22 @@
       if (!g.on && Math.hypot(dx, dy) < 4) return;
       g.on = true;
       ui.bar.classList.add('grab');
-      barPref.x = g.x + dx;
-      barPref.y = g.y + dy;
+      // Рядом с серединой окна панель встаёт ровно по центру
+      const r = ui.bar.getBoundingClientRect(), cx = g.x + dx + r.width / 2;
+      barPref.fx = Math.abs(cx - innerWidth / 2) < 24 ? 0.5 : cx / innerWidth;
+      barPref.fy = (g.y + dy + r.height / 2) / innerHeight;
       placeBar();
     });
     const end = () => {
       if (!g) return;
       ui.bar.classList.remove('grab');
       if (g.on) saveBar();
-      else if (barPref.min) { barPref.min = false; placeBar(); saveBar(); }
       g = null;
       paintGridMenu();
     };
     ui.hand.addEventListener('pointerup', end);
     ui.hand.addEventListener('pointercancel', end);
-    ui.hand.addEventListener('dblclick', () => { delete barPref.x; delete barPref.y; placeBar(); saveBar(); paintGridMenu(); });
+    ui.hand.addEventListener('dblclick', () => { delete barPref.fx; delete barPref.fy; placeBar(); saveBar(); paintGridMenu(); });
     window.addEventListener('resize', placeBar);
   }
 
@@ -1728,6 +1884,7 @@
   function act(a, side) {
     if (!a.el.isConnected) return;
     if (a.type === 'text') { a.el.innerHTML = a[side]; touch(a.el); }
+    else if (a.type === 'del') setDel(a.el, a[side]);
     else setMove(a.el, clone(a[side]));
     flash(a.el);
   }
@@ -1833,6 +1990,15 @@
     // Клавиши, пока правится текст, перехватываем раньше сайта: иначе
     // его горячие клавиши (стрелки, пробел) сработают посреди слова.
     window.addEventListener('keydown', ev => {
+      if (HIDDEN) {
+        const t = ev.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+        if (!fromUI(ev) && !typing && (ev.metaKey || ev.ctrlKey) && !ev.altKey && (ev.code === 'KeyZ' || ev.code === 'KeyY')) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (ev.code === 'KeyY' || ev.shiftKey) redo(); else undo();
+        }
+        return;
+      }
       if (ev.key === 'Alt' || ev.key === 'Shift') { lastShift = ev.shiftKey; updateHover(ev.altKey); }
       if (fromUI(ev)) return;
       const el = editable(ev.target);
@@ -1852,6 +2018,8 @@
         if (dir) { ev.preventDefault(); ev.stopPropagation(); nudge(sel, dir[0], dir[1]); return; }
         if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); select(null); return; }
         if (ev.key === 'Enter' && isTextBlock(sel)) { ev.preventDefault(); ev.stopPropagation(); startEdit(sel); }
+        const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName) || ev.target.isContentEditable;
+        if ((ev.key === 'Delete' || ev.key === 'Backspace') && !inField) { ev.preventDefault(); ev.stopPropagation(); toggleDel(sel); }
         return;
       }
       ev.stopPropagation();
@@ -1873,13 +2041,15 @@
       }
     }, true);
     window.addEventListener('keyup', ev => {
+      if (HIDDEN) return;
       if (ev.key === 'Alt' || ev.key === 'Shift') { lastShift = ev.shiftKey; updateHover(ev.altKey); }
       if (editable(ev.target)) ev.stopPropagation();
     }, true);
-    window.addEventListener('keypress', ev => { if (editable(ev.target)) ev.stopPropagation(); }, true);
+    window.addEventListener('keypress', ev => { if (!HIDDEN && editable(ev.target)) ev.stopPropagation(); }, true);
     window.addEventListener('blur', () => { setHover(null); showLabel(null); });
 
     document.addEventListener('mousemove', ev => {
+      if (HIDDEN) return;
       const next = !ev.altKey && !drag && !editingEl() ? grabbed(ev.target, ev.shiftKey) : null;
       const h = next && !isTextBlock(next) ? next : null;
       if (h !== hov) { hov = h; loop(); }
@@ -1894,7 +2064,7 @@
     // Поэтому у mousedown гасим действие браузера (фокус и выделение), но
     // сайт событие получает. Внутри текста, который уже правится, всё как обычно.
     window.addEventListener('mousedown', ev => {
-      if (ev.button !== 0 || ev.altKey || fromUI(ev)) return;
+      if (HIDDEN || ev.button !== 0 || ev.altKey || fromUI(ev)) return;
       const ed = editingEl();
       if (ed && ed.contains(ev.target)) return;
       if (ed) ed.blur();
@@ -1904,7 +2074,7 @@
 
     window.addEventListener('pointerdown', ev => {
       if (!fromUI(ev)) ui.gm.classList.remove('on');
-      if (ev.button !== 0 || ev.altKey || ev.pointerType === 'touch' || fromUI(ev)) return;
+      if (HIDDEN || ev.button !== 0 || ev.altKey || ev.pointerType === 'touch' || fromUI(ev)) return;
       const ed = editingEl();
       if (ed && ed.contains(ev.target)) return;
       const el = grabbed(ev.target, ev.shiftKey);
@@ -1945,7 +2115,7 @@
     }, true);
     // Двойной щелчок: по тексту правка, по остальному заход внутрь карточки.
     window.addEventListener('dblclick', ev => {
-      if (ev.altKey || fromUI(ev)) return;
+      if (HIDDEN || ev.altKey || fromUI(ev)) return;
       const el = editable(ev.target);
       if (el && el === editingEl()) return;
       ev.preventDefault();
@@ -1954,11 +2124,11 @@
       if (b) select(b);
     }, true);
     // Картинки и ссылки браузер умеет таскать сам, в режиме правок это мешает.
-    window.addEventListener('dragstart', ev => { if (!editingEl()) ev.preventDefault(); }, true);
+    window.addEventListener('dragstart', ev => { if (!HIDDEN && !editingEl()) ev.preventDefault(); }, true);
 
     // Alt + щелчок: замечание к тому, по чему щёлкнули.
     document.addEventListener('click', ev => {
-      if (!ev.altKey) return;
+      if (HIDDEN || !ev.altKey) return;
       const el = pick(ev.target, ev.shiftKey);
       if (!el) return;
       ev.preventDefault();
@@ -1979,7 +2149,7 @@
     // Ссылки на другие страницы в режиме правок не открываются: по ним правят
     // текст. Якоря внутри страницы и Cmd/Ctrl + щелчок работают.
     document.addEventListener('click', ev => {
-      if (ev.altKey || ev.metaKey || ev.ctrlKey) return;
+      if (HIDDEN || ev.altKey || ev.metaKey || ev.ctrlKey) return;
       // Кнопка формы в режиме правок форму не отправляет
       const fb = ev.target.closest && ev.target.closest('button,input[type=submit]');
       if (fb && fb.form) ev.preventDefault();
@@ -1999,7 +2169,7 @@
     // Кнопки сайта в режиме правок не нажимаются, как и ссылки: двойной щелчок по ним правит текст.
     // Cmd или Ctrl + щелчок нажимает по-настоящему. Пока правится текст, щелчок внутри него тоже ничего не нажимает
     window.addEventListener('click', ev => {
-      if (fromUI(ev) || ev.altKey) return;
+      if (HIDDEN || fromUI(ev) || ev.altKey) return;
       const ed = editingEl();
       if (ed && ed.contains(ev.target)) { ev.preventDefault(); ev.stopPropagation(); return; }
       if (ev.metaKey || ev.ctrlKey) return;
@@ -2049,9 +2219,13 @@
       text: build, count: total, clear: clearAll, drop, reindex: () => { index(); restore(); render(); },
       reveal, data: () => JSON.parse(JSON.stringify(store)), page: PAGE, undo, redo,
     };
-    toast(applied
-      ? 'Уже внесено в файлы и убрано из списка: ' + applied
-      : 'Режим правок. Тяните, чтобы двигать. Двойной щелчок правит текст, Alt + щелчок оставляет замечание');
+    // Режим скрыли глазом в этой вкладке: на новой странице он тоже скрыт. Закладку нажали сами, значит показываем
+    if (isOff() && !LATE) setHidden(true);
+    else setOff(false);
+    let seen = false;
+    try { seen = localStorage.getItem(HINT_KEY) === '1'; } catch {}
+    if (applied) note('Уже внесено в файлы и убрано из списка: ' + applied);
+    else if (!HIDDEN && !seen) note('Тяните, чтобы двигать. Двойной щелчок правит текст, Alt + щелчок оставляет замечание, Delete убирает блок', true);
   }
 
   /* Во фрейме «Телефон»: только показать правки, без панели и без записи. */
@@ -2061,6 +2235,10 @@
     index();
     restore();
     for (const el of document.querySelectorAll('[data-pv-ce]')) el.removeAttribute('contenteditable');
+    document.documentElement.dataset.pvOff = '1';
+    const st = document.createElement('style');
+    st.textContent = '[data-pv-del]{display:none!important}';
+    document.head.appendChild(st);
     window.__pravki = { preview: true };
   }
 
