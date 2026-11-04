@@ -6,10 +6,10 @@
     pbpaste | python3 locate.py - [--root папка]
 
 Папку берёт из строки «папка: …» пакета, если --root не указан.
-Ищет текст «было» (а для замечаний без правки — сам текст блока) сначала
+Ищет текст «было» (а для замечаний без правки сам текст блока) сначала
 в файле страницы и в файле-источнике из пометки, потом во всех текстовых
 файлах папки. Теги, &nbsp;, \\u00a0 и переносы при поиске не мешают.
-Для замечаний к блоку целиком ищет id из строки «где:», для картинок —
+Для замечаний к блоку целиком ищет id из строки «где:», для картинок
 имя файла. Строки сдвига («сдвиг:», «размер:», «выровнено:») печатает как есть.
 
 Печатает по записи на строку: номер, адрес, файл:строка и кусок строки.
@@ -68,7 +68,7 @@ def parse(pack):
     for line in pack.splitlines():
         s = line.strip()
         if s.startswith('папка:'):
-            root = s.split(':', 1)[1].strip()
+            root = s.split(':', 1)[1].split(' (открыта на сайте пакета')[0].strip()
         elif s.startswith('═══'):
             page = s.strip('═ ').split('  ·  ')[0].strip()
             page_src = None
@@ -170,6 +170,14 @@ def search(root, rec, idx, needle):
     return found
 
 
+def read_pack(path):
+    """Пакет правок в UTF-8 или UTF-16: так его сохраняет PowerShell 5.1 через >. BOM не мешает"""
+    data = open(path, 'rb').read()
+    if data[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        return data.decode('utf-16')
+    return data.decode('utf-8-sig', errors='replace')
+
+
 def main():
     # Консоль Windows бывает не в UTF-8: лишний знак лучше заменить, чем упасть.
     # Вывод в UTF-8: агенты на Windows читают его из трубы, а не из консоли.
@@ -183,11 +191,13 @@ def main():
     ap.add_argument('--root', help='папка проекта (если в пакете нет строки «папка:»)')
     args = ap.parse_args()
 
-    pack = sys.stdin.read() if args.pack == '-' else open(args.pack, encoding='utf-8').read()
+    pack = sys.stdin.read() if args.pack == '-' else read_pack(args.pack)
     root, recs = parse(pack)
     root = args.root or root
     if not root or not os.path.isdir(root):
-        sys.exit('Не знаю папку проекта: добавь --root')
+        # Пакет из «Открыть папку» на сайте пакета знает только имя папки, а не путь к ней
+        sys.exit('Папку сайта не нашёл%s. Запусти ещё раз с --root <папка сайта>'
+                 % ((' по строке «папка: %s»' % root) if root else ''))
     exclude = None if args.pack == '-' else os.path.realpath(args.pack)
     idx = Index(root, exclude)
 

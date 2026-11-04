@@ -5,18 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Режим правок</title>
 <style>
-/* Стартовая страница пакета «Режим правок». Цвета и шапка как у пакета «Ролик из HTML» */
+/* Стартовая страница пакета «Режим правок». Цвета, шрифты и шапка как у пакета «Ролик из HTML».
+   Шрифты SB Sans берутся установленные на компьютере, файлов шрифтов на сайте нет */
+@font-face { font-family: "SB Sans Text"; font-weight: 400; src: local("SBSansText-Regular"), local("SB Sans Text Regular"); }
+@font-face { font-family: "SB Sans Text"; font-weight: 500; src: local("SBSansText-Medium"), local("SB Sans Text Medium"); }
+@font-face { font-family: "SB Sans Text"; font-weight: 600; src: local("SBSansText-Semibold"), local("SB Sans Text Semibold"); }
+@font-face { font-family: "SB Sans Display Extended"; font-weight: 600; src: local("SBSansDisplay-ExtendedSemibold"), local("SB Sans Display Extended Semibold"); }
 :root {
-  --ui-bg: #121316; --ui-fg: #ECECEE; --ui-mute: #86878D; --ui-line: #232428; --ui-line2: #393A40;
+  --ui-bg: #000000; --ui-fg: #ECECEE; --ui-mute: #86878D; --ui-line: #232428; --ui-line2: #393A40;
   --go: #21A038;
 }
 html { background: var(--ui-bg); color: var(--ui-fg); }
 body {
   margin: 0; background: var(--ui-bg); color: var(--ui-fg);
-  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font: 16px/1.55 "SB Sans Text", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-.page { max-width: 1120px; margin: 0 auto; padding: 24px 24px 120px; }
+.page { max-width: 1120px; margin: 0 auto; padding: 28px 24px 120px; }
 a { color: var(--ui-fg); text-underline-offset: 3px; text-decoration-color: var(--ui-line2); }
 p { margin: 0 0 12px; }
 .mute { color: var(--ui-mute); }
@@ -28,14 +33,15 @@ kbd { font: 0.88em/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; p
 .top a:hover { color: var(--ui-fg); }
 .top a.on { color: var(--ui-fg); font-weight: 600; }
 
-h1 { margin: 88px 0 16px; font-size: 48px; line-height: 1.08; font-weight: 650; letter-spacing: -0.02em; }
-h2 { margin: 104px 0 32px; font-size: 30px; line-height: 1.15; font-weight: 620; letter-spacing: -0.01em; }
+h1, h2 { font-family: "SB Sans Display Extended", "SB Sans Text", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-weight: 600; letter-spacing: 0; }
+h1 { margin: 88px 0 16px; font-size: 46px; line-height: 1.1; }
+h2 { margin: 104px 0 32px; font-size: 28px; line-height: 1.2; }
 h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
 .lead { max-width: 680px; margin: 0 0 28px; font-size: 20px; line-height: 1.5; color: var(--ui-mute); }
 
 .btn {
   display: inline-block; padding: 13px 22px; border-radius: 8px; border: 0; cursor: pointer;
-  background: var(--ui-fg); color: var(--ui-bg); font: 600 16px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  background: var(--ui-fg); color: var(--ui-bg); font: 600 16px/1.2 "SB Sans Text", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   text-decoration: none;
 }
 .btn:hover { opacity: .9; }
@@ -70,12 +76,13 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
   background: rgba(18,19,22,.86); font-size: 28px; font-weight: 600; pointer-events: none; }
 #drop.on { display: flex; }
 
-.foot { margin-top: 104px; display: flex; flex-wrap: wrap; gap: 8px 28px; color: var(--ui-mute); font-size: 15px; }
-.foot a { color: var(--ui-mute); }
-.foot a:hover { color: var(--ui-fg); }
+.foot { margin-top: 104px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; color: var(--ui-mute); font-size: 15px; }
+.foot a:not(.btn) { color: var(--ui-mute); }
+.foot a:not(.btn):hover { color: var(--ui-fg); }
 
+/* Поля как у сайта ролика, чтобы шапка не прыгала при переходе */
+@media (max-width: 640px) { .page { padding: 20px 16px 96px; } }
 @media (max-width: 860px) {
-  .page { padding: 18px 16px 96px; }
   h1 { margin-top: 56px; font-size: 36px; }
   h2 { margin-top: 72px; font-size: 26px; }
   .lead { font-size: 18px; }
@@ -93,7 +100,7 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
 </nav>
 
 <h1>Режим правок</h1>
-<p class="lead">Правьте HTML-страницу прямо в&nbsp;браузере, а&nbsp;потом отдайте правки ИИ одним сообщением. Для презентаций и&nbsp;сайтов, без установки программ</p>
+<p class="lead">Правьте HTML-страницу прямо в&nbsp;браузере на&nbsp;компьютере, а&nbsp;потом отдайте правки ИИ одним сообщением. Для презентаций и&nbsp;сайтов, без установки программ</p>
 <a class="btn" href="%D0%9F%D1%80%D0%B8%D0%BC%D0%B5%D1%80.html">Попробовать на&nbsp;примере</a>
 
 <img class="shot" src="img/screenshot.png" alt="Страница в режиме правок: выбран блок, розовая линия привязки, панель режима внизу">
@@ -107,17 +114,17 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
 <div class="ways">
 
   <div>
-    <h3>Открыть файл здесь</h3>
+    <h3>Открыть папку здесь</h3>
     <p class="who">Если работаете с&nbsp;ИИ в&nbsp;чате: ChatGPT, GigaChat, Claude</p>
     <p>Выберите папку с&nbsp;презентацией или сайтом. Страница откроется в&nbsp;этой вкладке уже в&nbsp;режиме правок</p>
-    <p>Когда закончите, нажмите «Скопировать правки» и&nbsp;отправьте в&nbsp;чат инструкцию, файл страницы и&nbsp;правки. ИИ пришлёт исправленный файл</p>
+    <p>Когда закончите, нажмите «Скопировать правки» и&nbsp;отправьте в&nbsp;чат инструкцию, правки и&nbsp;файлы страниц со&nbsp;стилями. ИИ пришлёт исправленные файлы</p>
     <div class="row">
       <button class="btn" data-open="dir">Открыть папку</button>
       <button class="link" data-open="file">или один файл</button>
     </div>
     <div id="picked" aria-live="polite"></div>
     <p><button class="link" data-copy="instr">Скопировать инструкцию для&nbsp;ИИ</button></p>
-    <p class="mute">Файлы остаются у&nbsp;вас в&nbsp;браузере, в&nbsp;интернет они не&nbsp;уходят</p>
+    <p class="mute">Chrome спросит, загрузить&nbsp;ли файлы на&nbsp;сайт. Это его обычный вопрос: файлы остаются у&nbsp;вас в&nbsp;браузере и&nbsp;в&nbsp;интернет не&nbsp;уходят. Без вопроса можно просто перетащить папку на&nbsp;эту страницу</p>
   </div>
 
   <div>
@@ -139,8 +146,8 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
 </div>
 
 <div class="foot">
-  <a href="https://github.com/Tomb-Raider/rezhim-pravok/archive/refs/heads/main.zip">Скачать пакет</a>
-  <a href="https://github.com/Tomb-Raider/rezhim-pravok">Пакет на&nbsp;GitHub</a>
+  <a class="btn ghost" href="https://github.com/Tomb-Raider/rezhim-pravok/archive/refs/heads/main.zip">Скачать пакет</a>
+  <a href="https://github.com/Tomb-Raider/rezhim-pravok">GitHub</a>
   <span>Лицензия MIT</span>
 </div>
 

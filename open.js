@@ -28,6 +28,7 @@ const isHTML = p => /\.html?$/i.test(p)
 const encPath = p => p.split('/').map(encodeURIComponent).join('/')
 // Один вид адреса для страницы и помощника sw.js, как бы браузер ни закодировал имя файла
 const canon = p => { try { p = decodeURIComponent(p) } catch {} return encPath(p) }
+const hash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36) }
 const order = (a, b) => (a.split('/').length - b.split('/').length) || ((b === 'index.html') - (a === 'index.html')) || a.localeCompare(b)
 
 // Режим правок перед последним </body>, а если его нет, перед </html> или в конец
@@ -77,7 +78,9 @@ async function openFiles(root, entries) {
   const cfgFile = entries.find(e => e.path === '.pravki.json')
   if (cfgFile) try { site = JSON.parse(await cfgFile.file.text()) } catch {}
   const cfg = Object.assign({}, site, {
-    root, name: site.name || root, base: decodeURIComponent(basePath), baseURL: basePath,
+    root, name: site.name || root, base: decodeURIComponent(basePath), baseURL: basePath, opened: true,
+    // У двух папок с одним именем правки не смешаются: ключ хранилища ещё и по составу страниц
+    key: root + '#' + hash(pages.join('|')),
     pagesList: pages.map(p => ({ path: p, name: ((site.pages || {})[p] || {}).name || '' })),
   })
   // Режим берём свежим при каждом открытии папки, а не из кэша браузера

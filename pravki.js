@@ -29,19 +29,19 @@
    Настройки (window.PRAVKI_CONFIG, сервер берёт их из .pravki.json):
      name     название сайта для шапки выгрузки
      root     папка сайта на диске (сервер подставляет сам)
-     pages    { "путь/страница.html": { name, src, sources } } —
+     pages    { "путь/страница.html": { name, src, sources } }:
               src: файл, из которого страница собирается скриптом;
-              sources: { "селектор": "файл" } — текст этих блоков живёт не в разметке
+              sources: { "селектор": "файл" }, текст этих блоков живёт не в разметке
      sources  то же, что pages[…].sources, но для всех страниц
      skip     селекторы служебных блоков: их не правят и не двигают
      freeze   true → остановить GSAP, ScrollTrigger и Lenis
      reveal   true → сразу показать всё, что спрятано до прокрутки
      css      свои стили на время правки
-     grid     { type: "cell", step: 8, cols: 12, gutter: 24, margin, row: 8, frame: ".slide" } —
+     grid     { type: "cell", step: 8, cols: 12, gutter: 24, margin, row: 8, frame: ".slide" }:
               сетка: клетка с шагом step или колонки (cols, промежуток, поля,
               по умолчанию отступы кадра, шаг строк row) и селектор кадра.
               Меню «Сетка» меняет вид и размеры, выбор помнит браузер
-     base, baseURL, pagesList — для страницы «Открыть свой файл» на сайте
+     base, baseURL, pagesList, key, opened: для «Открыть папку» на сайте
               пакета: начало адреса, которое не входит в имя страницы, и список страниц
    ============================================================ */
 
@@ -53,7 +53,7 @@
   const auto = !!(me && me.dataset.auto);
   if (!auto && !/[?&#]pravki\b/.test(location.search + location.hash)) return;
   // Во фрейме молчим: панель правок одна, у страницы верхнего уровня.
-  // Исключение — просмотр на ширине телефона: там правки только показываем.
+  // Исключение: просмотр на ширине телефона, там правки только показываем.
   const PREVIEW = window.top !== window && /pravki-preview/.test(location.hash);
   if (window.top !== window && !PREVIEW) return;
   window.__pravki = { loading: true };
@@ -78,7 +78,7 @@
     ? decodeURIComponent(location.pathname.replace(/[^/]*$/, '')).replace(/\/$/, '').replace(/^\/([A-Za-z]:)/, '$1')
     : '');
   const SITE = CFG.name || (ROOT ? ROOT.split(/[\\/]/).filter(Boolean).pop() : '') || document.title || location.host;
-  const KEY = 'pravki:' + (CFG.root || location.host + location.pathname.replace(/[^/]*$/, ''));
+  const KEY = 'pravki:' + (CFG.key || CFG.root || location.host + location.pathname.replace(/[^/]*$/, ''));
 
   function load() {
     try {
@@ -145,7 +145,7 @@
     'PRE', 'DETAILS', 'SUMMARY', 'FIELDSET']);
 
   const SKIP_BASE = ['script', 'style', 'noscript', 'template', 'svg', 'canvas', 'iframe',
-    'video', 'audio', 'object', 'embed', 'select', 'textarea', 'input', 'button', 'option',
+    'video', 'audio', 'object', 'embed', 'select', 'textarea', 'input', 'option',
     '[hidden]', '[contenteditable]:not([data-pv-ce])', 'pravki-ui'];
   // Чужой селектор с ошибкой не должен ронять весь режим: проверяем по одному.
   const SKIP_CFG = (CFG.skip || []).filter(s => {
@@ -586,7 +586,7 @@
 
   function build() {
     const out = ['ПРАВКИ САЙТА · ' + SITE + ' · ' + stamp() + ' · записей: ' + total()];
-    if (ROOT) out.push('папка: ' + ROOT);
+    if (ROOT) out.push('папка: ' + ROOT + (CFG.opened ? ' (открыта на сайте пакета, полный путь знает человек)' : ''));
     else {
       const dir = location.origin + location.pathname.replace(/[^/]*$/, '');
       let readable = dir;
@@ -724,21 +724,33 @@
        -webkit-font-smoothing:antialiased;letter-spacing:normal;text-transform:none}
     button{font:inherit;cursor:pointer}
 
-    .bar{position:fixed;left:16px;bottom:16px;z-index:2147483646;display:flex;align-items:center;gap:6px;
-         padding:6px 6px 6px 14px;background:#12151A;color:#fff;border-radius:999px;font-size:13px;
-         box-shadow:0 12px 30px -12px rgba(0,0,0,.55);max-width:calc(100vw - 32px);flex-wrap:wrap}
+    .bar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:2147483646;display:flex;align-items:center;
+         justify-content:center;flex-wrap:wrap;gap:4px;padding:6px;background:#12151A;color:#fff;border-radius:999px;font-size:13px;
+         box-shadow:0 0 0 1px rgba(255,255,255,.08),0 12px 30px -12px rgba(0,0,0,.55);width:max-content;max-width:calc(100vw - 16px)}
+    .bar.moved{transform:none}
+    .bar .hand{display:flex;align-items:center;gap:8px;height:34px;padding:0 4px 0 8px;cursor:grab;user-select:none;white-space:nowrap}
+    .bar.grab,.bar.grab .hand{cursor:grabbing}
     .bar .dot{width:8px;height:8px;border-radius:50%;background:#21A038;flex:none}
     .bar .t{font-weight:600}
-    .bar .cnt{color:#98A0A8;font-variant-numeric:tabular-nums;margin-right:4px}
-    .bar .cnt b{color:#fff;font-weight:600}
-    .bar button{font-size:13px;font-weight:500;line-height:1;border:0;border-radius:999px;padding:9px 14px;
-                background:transparent;color:#fff;box-shadow:inset 0 0 0 1px #363C44;white-space:nowrap}
+    .bar .n{min-width:22px;height:22px;padding:0 7px;border-radius:11px;background:#262B33;display:inline-flex;align-items:center;
+            justify-content:center;font-weight:600;font-variant-numeric:tabular-nums}
+    .bar .sep{width:1px;height:20px;background:#2C323A;margin:0 4px;flex:none}
+    .bar button{height:34px;padding:0 12px;border:0;border-radius:999px;display:inline-flex;align-items:center;gap:6px;
+                background:transparent;color:#fff;font-size:13px;font-weight:500;line-height:1;white-space:nowrap}
+    .bar button svg{flex:none}
     .bar button:hover{background:#232830}
-    .bar button.ic{padding:7px 8px;box-shadow:none;display:inline-flex}
+    .bar button.ic{width:34px;padding:0;justify-content:center}
     .bar button[disabled]{opacity:.35;cursor:default;background:transparent}
-    .bar button.on{background:#25303F;box-shadow:inset 0 0 0 1px #4C8DFF}
-    .bar button.go{background:#21A038;box-shadow:none}
-    .bar button.go:hover{filter:brightness(1.1)}
+    .bar button.on{background:#25303F;color:#8FB6FF}
+    .bar button.go{background:#21A038;font-weight:600;padding:0 16px}
+    .bar button.go:hover{background:#26B140}
+    .bar.min .full{display:none}
+    .bar.wrap{border-radius:22px}
+    @media (max-width:820px){
+      .bar .lb,.bar .t{display:none}
+      .bar button.full:not(.ic):not(.go){width:34px;padding:0;justify-content:center}
+    }
+    .bar.min #fold svg{transform:rotate(180deg)}
 
     .side{position:fixed;top:0;right:0;bottom:0;width:min(400px,100vw);z-index:2147483645;display:none;
           flex-direction:column;background:#FAFBFC;border-left:1px solid #E4E7EA;
@@ -854,6 +866,15 @@
     const k = t => '<kbd>' + t + '</kbd>';
     const ARROW = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
       'stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8H7"/></svg>';
+    // Значки панели
+    const ICONS = {
+      grid: '<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M6.2 2.5v11M9.8 2.5v11M2.5 6.2h11M2.5 9.8h11"/>',
+      phone: '<rect x="4.5" y="1.8" width="7" height="12.4" rx="1.6"/><path d="M7.2 12h1.6"/>',
+      list: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.8" cy="4" r=".6"/><circle cx="2.8" cy="8" r=".6"/><circle cx="2.8" cy="12" r=".6"/>',
+      down: '<path d="M3.5 6l4.5 4.5L12.5 6"/>',
+    };
+    const ICON = n => '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
+      'stroke-linecap="round" stroke-linejoin="round">' + ICONS[n] + '</svg>';
     const EYE_OFF = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
       'stroke-linecap="round" stroke-linejoin="round"><path d="M2 8s2.2-4.5 6-4.5S14 8 14 8s-2.2 4.5-6 4.5S2 8 2 8z"/>' +
       '<circle cx="8" cy="8" r="1.8"/><path d="M2.5 13.5l11-11"/></svg>';
@@ -867,16 +888,19 @@
           '<div class="guides" id="guides"></div>' +
           '<div class="box" id="box"><div class="hdl" id="hdl" title="Тяните, чтобы поменять размер"></div></div>' +
           '<div class="dim" id="dim"></div></div>' +
-        '<div class="bar">' +
-          '<span class="dot"></span><span class="t">Режим правок</span>' +
-          '<span class="cnt">записей: <b id="cnt">0</b></span>' +
-          '<button class="ic" id="undo" title="Назад · ' + CMD + ' + Z" aria-label="Назад" disabled>' + ARROW + '</button>' +
-          '<button class="ic" id="redo" title="Вперёд · Shift + ' + CMD + ' + Z" aria-label="Вперёд" disabled>' +
+        '<div class="bar" id="bar">' +
+          '<div class="hand" id="hand" title="Тяните, чтобы переставить панель. Двойной щелчок вернёт её вниз по центру">' +
+            '<span class="dot"></span><span class="t">Режим правок</span><span class="n" id="cnt" title="Записей в правках">0</span></div>' +
+          '<span class="sep full"></span>' +
+          '<button class="ic full" id="undo" title="Назад · ' + CMD + ' + Z" aria-label="Назад" disabled>' + ARROW + '</button>' +
+          '<button class="ic full" id="redo" title="Вперёд · Shift + ' + CMD + ' + Z" aria-label="Вперёд" disabled>' +
             ARROW.replace('<svg ', '<svg style="transform:scaleX(-1)" ') + '</button>' +
-          '<button id="gridBtn" title="Клетка или колонки, края встают по ним">Сетка</button>' +
-          '<button id="phoneBtn" title="Страница с правками шириной 390 px">Телефон</button>' +
-          '<button id="list">Список</button>' +
-          '<button class="go" id="copy">Скопировать правки</button>' +
+          '<span class="sep full"></span>' +
+          '<button class="full" id="gridBtn" title="Клетка или колонки, края встают по ним">' + ICON('grid') + '<span class="lb">Сетка</span></button>' +
+          '<button class="full" id="phoneBtn" title="Страница с правками шириной 390 px">' + ICON('phone') + '<span class="lb">Телефон</span></button>' +
+          '<button class="full" id="list">' + ICON('list') + '<span class="lb">Список</span></button>' +
+          '<button class="go full" id="copy">Скопировать правки</button>' +
+          '<button class="ic" id="fold" title="Свернуть панель" aria-label="Свернуть панель">' + ICON('down') + '</button>' +
         '</div>' +
         '<div class="gm" id="gm">' +
           '<div class="seg"><button data-g="cell">Клетка</button><button data-g="cols">Колонки</button></div>' +
@@ -908,7 +932,8 @@
             '<p><b>Назад и вперёд.</b> Стрелки на панели или ' + k(CMD) + ' + ' + k('Z') + ' и ' + k('Shift') + ' + ' + k(CMD) + ' + ' + k('Z') + '</p>' +
             '<p><b>Сетка.</b> Кнопка показывает сетку и открывает меню: клетка или колонки, размеры ползунками. Пока сетка видна, края встают по ней. «Скрыть сетку» убирает её</p>' +
             '<p><b>Телефон.</b> Страница с правками шириной 390 px, как на телефоне</p>' +
-            '<p><b>Неразрывный пробел.</b> ' + k('Alt') + ' + пробел или ' + k('Ctrl') + ' + ' + k('Shift') + ' + пробел. <b>Перенос строки.</b> ' + k('Enter') + '</p>' +
+            '<p><b>Панель.</b> Тяните за название, чтобы переставить. Двойной щелчок по названию вернёт её вниз по центру. Стрелка справа сворачивает и разворачивает</p>' +
+            '<p><b>Неразрывный пробел.</b> ' + (MAC ? k('Alt') + ' + пробел или ' : '') + k('Ctrl') + ' + ' + k('Shift') + ' + пробел. <b>Перенос строки.</b> ' + k('Enter') + '</p>' +
             '<p><b>Отдать ИИ.</b> «Скопировать правки» и вставить в чат одним сообщением</p>' +
             '<p style="color:#7A8189">Правки хранятся в этом браузере по каждой странице, страницу можно закрыть и вернуться. Сам сайт не меняется, режим ничего не отправляет в сеть. Ссылки в режиме правок не открываются, открыть можно с ' + k(CMD) + '</p>' +
           '</div>' +
@@ -916,7 +941,7 @@
         '<div class="lbl" id="lbl"></div>' +
         '<div class="toast" id="toast"></div>' +
         '<div class="ph" id="ph"><div class="phw">' +
-          '<div class="phb"><span>Ширина телефона, 390 px</span><button id="phx">Закрыть</button></div>' +
+          '<div class="phb"><span>Ширина телефона, 390 px. Сдвиги такие же, как на широком экране</span><button id="phx">Закрыть</button></div>' +
           '<iframe id="phf" title="Страница на ширине телефона"></iframe></div></div>' +
         '<div class="modal" id="modal"><div class="mbox">' +
           '<p><b>Браузер не дал скопировать сам.</b> Текст ниже уже выделен, нажмите ' + k(CMD) + ' + ' + k('C') + ' и вставьте в чат. ' +
@@ -928,7 +953,7 @@
 
     const $ = id => root.getElementById(id);
     ui = {
-      host, root, cnt: $('cnt'), side: $('side'), items: $('items'), pages: $('pages'),
+      host, root, bar: $('bar'), hand: $('hand'), cnt: $('cnt'), side: $('side'), items: $('items'), pages: $('pages'),
       lbl: $('lbl'), toast: $('toast'), help: $('help'), modal: $('modal'), mtext: $('mtext'),
       box: $('box'), hdl: $('hdl'), hov: $('hov'), dim: $('dim'), guides: $('guides'), cols: $('cols'),
       undo: $('undo'), redo: $('redo'), gridBtn: $('gridBtn'), gm: $('gm'), cell: $('cell'), ph: $('ph'), phf: $('phf'),
@@ -977,12 +1002,17 @@
     });
     $('phoneBtn').addEventListener('click', phone);
     $('phx').addEventListener('click', closePhone);
+    $('fold').addEventListener('click', () => { barPref.min = !barPref.min; placeBar(); saveBar(); });
+    bindBarDrag();
+    placeBar();
+    typoNodes(root);
+    new MutationObserver(() => typoNodes(ui.items)).observe(ui.items, { childList: true, subtree: true });
     $('reset').addEventListener('click', () => {
       const here = liveRecs(PAGE).length, all = total();
       if (!all) return;
       const msg = here && here !== all
-        ? 'Убрать ' + here + ' правок этой страницы? На других останутся'
-        : 'Убрать все ' + all + ' правок?';
+        ? 'Убрать ' + here + ' ' + plural(here) + ' этой страницы? На других останутся'
+        : (all === 1 ? 'Убрать 1 правку?' : 'Убрать все ' + all + ' ' + plural(all) + '?');
       if (!confirm(msg)) return;
       if (here && here !== all) Object.keys(recs()).forEach(drop);
       else clearAll();
@@ -1001,9 +1031,22 @@
     ? location.href.replace(/[^/]*([?#].*)?$/, '') + encodeURIComponent(p)
     : (CFG.baseURL || '/') + p.split('/').map(encodeURIComponent).join('/');
 
+  const plural = n => (n % 10 === 1 && n % 100 !== 11) ? 'правку'
+    : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? 'правки' : 'правок';
+  // Неразрывный пробел после однобуквенных слов в подписях панели
+  const typo = t => t.replace(/(^|[\s(«])([аиксоуяв])\s/gi, '$1$2' + NBSP).replace(/(^|[\s(«])([аиксоуяв])\s/gi, '$1$2' + NBSP);
+  function typoNodes(root) {
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      if (n.parentElement && n.parentElement.closest('textarea,kbd,code,.addr')) continue;
+      const v = typo(n.nodeValue);
+      if (v !== n.nodeValue) n.nodeValue = v;
+    }
+  }
+
   function toast(msg) {
     if (!ui) return;
-    ui.toast.textContent = msg;
+    ui.toast.textContent = typo(msg);
     ui.toast.classList.add('on');
     clearTimeout(toast.t);
     toast.t = setTimeout(() => ui.toast.classList.remove('on'), 2200);
@@ -1312,6 +1355,62 @@
     return c && c !== ui.host ? c : document.body;
   }
 
+  /* Панель: внизу по центру, её можно перетащить за название и свернуть. Место и вид браузер помнит */
+  const BAR_KEY = 'pravki:bar';
+  const barPref = (() => { try { return JSON.parse(localStorage.getItem(BAR_KEY)) || {}; } catch { return {}; } })();
+  function saveBar() { try { localStorage.setItem(BAR_KEY, JSON.stringify(barPref)); } catch {} }
+
+  function placeBar() {
+    const b = ui.bar;
+    b.classList.toggle('min', !!barPref.min);
+    ui.fold = ui.fold || b.querySelector('#fold');
+    ui.fold.title = barPref.min ? 'Развернуть панель' : 'Свернуть панель';
+    if (barPref.x == null) { b.classList.remove('moved'); b.style.left = b.style.top = b.style.bottom = ''; }
+    else {
+      b.classList.add('moved');
+      const r = b.getBoundingClientRect();
+      const x = Math.max(8, Math.min(barPref.x, innerWidth - r.width - 8));
+      const y = Math.max(8, Math.min(barPref.y, innerHeight - r.height - 8));
+      Object.assign(b.style, { left: x + 'px', top: y + 'px', bottom: 'auto' });
+    }
+    // Если панель не влезла в одну строку, скругляем её меньше, иначе она превращается в овал
+    b.classList.remove('wrap');
+    if (b.getBoundingClientRect().height > 52) b.classList.add('wrap');
+  }
+
+  function bindBarDrag() {
+    let g = null;
+    ui.hand.addEventListener('pointerdown', ev => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      ui.hand.setPointerCapture(ev.pointerId);
+      const r = ui.bar.getBoundingClientRect();
+      g = { sx: ev.clientX, sy: ev.clientY, x: r.left, y: r.top, on: false };
+    });
+    ui.hand.addEventListener('pointermove', ev => {
+      if (!g) return;
+      const dx = ev.clientX - g.sx, dy = ev.clientY - g.sy;
+      if (!g.on && Math.hypot(dx, dy) < 4) return;
+      g.on = true;
+      ui.bar.classList.add('grab');
+      barPref.x = g.x + dx;
+      barPref.y = g.y + dy;
+      placeBar();
+    });
+    const end = () => {
+      if (!g) return;
+      ui.bar.classList.remove('grab');
+      if (g.on) saveBar();
+      else if (barPref.min) { barPref.min = false; placeBar(); saveBar(); }
+      g = null;
+      paintGridMenu();
+    };
+    ui.hand.addEventListener('pointerup', end);
+    ui.hand.addEventListener('pointercancel', end);
+    ui.hand.addEventListener('dblclick', () => { delete barPref.x; delete barPref.y; placeBar(); saveBar(); paintGridMenu(); });
+    window.addEventListener('resize', placeBar);
+  }
+
   function hideGrid() {
     ui.cols.textContent = '';
     ui.cell.style.display = 'none';
@@ -1336,7 +1435,8 @@
     for (const id in val) { $(id).value = val[id]; $(id).nextElementSibling.textContent = val[id]; }
     const r = ui.gridBtn.getBoundingClientRect();
     ui.gm.style.left = Math.max(8, Math.min(r.left - 12, innerWidth - 252)) + 'px';
-    ui.gm.style.bottom = (innerHeight - r.top + 8) + 'px';
+    if (r.top > 300) { ui.gm.style.bottom = (innerHeight - r.top + 8) + 'px'; ui.gm.style.top = 'auto'; }
+    else { ui.gm.style.top = (r.bottom + 8) + 'px'; ui.gm.style.bottom = 'auto'; }
   }
 
   function paintGrid() {
@@ -1379,7 +1479,7 @@
       const r = n.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) return;
       if (r.bottom < -200 || r.top > innerHeight + 200 || r.right < -200 || r.left > innerWidth + 200) return;
-      out.push({ n, container, l: r.left, r: r.right, t: r.top, b: r.bottom,
+      out.push({ n, container, wide: !container && r.width > innerWidth * 0.8, l: r.left, r: r.right, t: r.top, b: r.bottom,
         cx: r.left + r.width / 2, cy: r.top + r.height / 2 });
     };
     const p = el.parentElement, gp = p && p.parentElement;
@@ -1401,6 +1501,7 @@
       const vals = x ? [T.l, T.cx, T.r] : [T.t, T.cy, T.b];
       for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
         if ((i === 1) !== (j === 1)) continue;
+        if (i === 1 && T.wide) continue;  // центр блока во всю ширину это просто центр страницы
         const d = vals[j] - pts[i];
         if (Math.abs(d) > SNAP) continue;
         const score = Math.abs(d) + (T.container ? 0.3 : 0) + (i === 1 ? 0.2 : 0);
@@ -1476,20 +1577,22 @@
     let mx = ev.clientX - d.sx, my = ev.clientY - d.sy;
     const R = { l: d.rect.left + mx, t: d.rect.top + my, w: d.rect.width, h: d.rect.height };
     guides = [];
-    const snaps = [];
+    const xs = [], ys = [];
     if (!(ev.metaKey || ev.ctrlKey)) {
       const sx = snapAxis([R.l, R.l + R.w / 2, R.l + R.w], d.targets, true);
       const sy = snapAxis([R.t, R.t + R.h / 2, R.t + R.h], d.targets, false);
-      if (sx) { mx += sx.d; R.l += sx.d; snaps.push(sx.text); }
-      else if (d.grid) { const g = gridSnapX(R, d.grid); mx += g.d; R.l += g.d; snaps.push(g.text); }
-      if (sy) { my += sy.d; R.t += sy.d; snaps.push(sy.text); }
-      else if (d.grid) { const g = gridSnapY(R, d.grid); my += g.d; R.t += g.d; snaps.push(g.text); }
+      if (sx) { mx += sx.d; R.l += sx.d; xs.push(sx.text); }
+      else if (d.grid) { const g = gridSnapX(R, d.grid); mx += g.d; R.l += g.d; xs.push(g.text); }
+      if (sy) { my += sy.d; R.t += sy.d; ys.push(sy.text); }
+      else if (d.grid && d.grid.type === 'cell') { const g = gridSnapY(R, d.grid); my += g.d; R.t += g.d; ys.push(g.text); }
       if (sx) guides.push({ x: sx.at, a: Math.min(R.t, sx.T.t), b: Math.max(R.t + R.h, sx.T.b) });
       if (sy) guides.push({ y: sy.at, a: Math.min(R.l, sy.T.l), b: Math.max(R.l + R.w, sy.T.r) });
     }
-    const m = Object.assign(clone(d.base), {
-      dx: Math.round(d.base.dx + mx / d.k), dy: Math.round(d.base.dy + my / d.k), snap: snaps, vw: innerWidth,
-    });
+    // В «выровнено» только оси, по которым блок сдвинули. По другой оси остаётся то, что было
+    const dx = Math.round(d.base.dx + mx / d.k), dy = Math.round(d.base.dy + my / d.k);
+    const old = d.base.snap || [], isX = t => /^(левый|правый|центр)/.test(t);
+    const snaps = [].concat(dx !== d.base.dx ? xs : old.filter(isX), dy !== d.base.dy ? ys : old.filter(t => !isX(t)));
+    const m = Object.assign(clone(d.base), { dx, dy, snap: snaps, vw: innerWidth });
     applyMove(d.el, m);
     d.m = m;
     drawGuides();
@@ -1662,18 +1765,24 @@
     return '<!doctype html>' + root.outerHTML;
   }
 
+  // Фрейм каждый раз новый: первая загрузка свежего фрейма не пишется в историю, и «Назад» браузера работает сразу
+  function freshFrame() {
+    const f = ui.phf.ownerDocument.createElement('iframe');
+    f.id = 'phf';
+    f.title = 'Страница на ширине телефона';
+    ui.phf.replaceWith(f);
+    ui.phf = f;
+    return f;
+  }
+
   function closePhone() {
     ui.ph.classList.remove('on');
-    ui.phf.onload = null;
-    ui.phf.removeAttribute('srcdoc');
-    ui.phf.src = 'about:blank';
+    freshFrame();
   }
 
   function phone() {
     select(null);
-    const f = ui.phf;
-    f.removeAttribute('srcdoc');
-    f.removeAttribute('sandbox');
+    const f = freshFrame();
     f.onload = () => {
       // Страница во фрейме сама показывает правки, если режим в неё уже подключён
       // (сервер или строка в странице). После закладки подключаем его сами.
@@ -1707,7 +1816,7 @@
       if (el) touch(el);
     });
 
-    // Правка текста целиком (от входа до выхода) — один шаг назад.
+    // Правка текста целиком, от входа до выхода, это один шаг назад.
     document.addEventListener('focusin', ev => {
       const el = editable(ev.target);
       if (el) el._pvEditHTML = el.innerHTML;
@@ -1750,6 +1859,12 @@
       if (ev.code === 'Space' && (ev.altKey || ((ev.metaKey || ev.ctrlKey) && ev.shiftKey))) {
         ev.preventDefault();
         document.execCommand('insertText', false, NBSP);
+        return;
+      }
+      // В кнопке пробел нажимает её, поэтому ставим его сами
+      if (ev.code === 'Space' && !ev.altKey && !ev.metaKey && !ev.ctrlKey && el.closest('button')) {
+        ev.preventDefault();
+        document.execCommand('insertText', false, ' ');
         return;
       }
       if (ev.key === 'Enter') {
@@ -1828,7 +1943,7 @@
       ev.preventDefault();
       ev.stopPropagation();
     }, true);
-    // Двойной щелчок: по тексту — правка, по остальному — заход внутрь карточки.
+    // Двойной щелчок: по тексту правка, по остальному заход внутрь карточки.
     window.addEventListener('dblclick', ev => {
       if (ev.altKey || fromUI(ev)) return;
       const el = editable(ev.target);
@@ -1841,7 +1956,7 @@
     // Картинки и ссылки браузер умеет таскать сам, в режиме правок это мешает.
     window.addEventListener('dragstart', ev => { if (!editingEl()) ev.preventDefault(); }, true);
 
-    // Alt + щелчок — замечание к тому, по чему щёлкнули.
+    // Alt + щелчок: замечание к тому, по чему щёлкнули.
     document.addEventListener('click', ev => {
       if (!ev.altKey) return;
       const el = pick(ev.target, ev.shiftKey);
@@ -1865,12 +1980,32 @@
     // текст. Якоря внутри страницы и Cmd/Ctrl + щелчок работают.
     document.addEventListener('click', ev => {
       if (ev.altKey || ev.metaKey || ev.ctrlKey) return;
+      // Кнопка формы в режиме правок форму не отправляет
+      const fb = ev.target.closest && ev.target.closest('button,input[type=submit]');
+      if (fb && fb.form) ev.preventDefault();
       const a = ev.target.closest && ev.target.closest('a[href]');
       if (!a) return;
       const href = a.getAttribute('href') || '';
       if (href.startsWith('#') || href.startsWith('javascript:')) return;
       ev.preventDefault();
+      if (!editingEl()) hintClick();
     });
+    let hintAt = 0;
+    const hintClick = () => {
+      if (Date.now() - hintAt < 6000) return;
+      hintAt = Date.now();
+      toast('Ссылки и кнопки в режиме правок не нажимаются. ' + CMD + ' + щелчок нажмёт');
+    };
+    // Кнопки сайта в режиме правок не нажимаются, как и ссылки: двойной щелчок по ним правит текст.
+    // Cmd или Ctrl + щелчок нажимает по-настоящему. Пока правится текст, щелчок внутри него тоже ничего не нажимает
+    window.addEventListener('click', ev => {
+      if (fromUI(ev) || ev.altKey) return;
+      const ed = editingEl();
+      if (ed && ed.contains(ev.target)) { ev.preventDefault(); ev.stopPropagation(); return; }
+      if (ev.metaKey || ev.ctrlKey) return;
+      const bt = ev.target.closest && ev.target.closest('button,[role=button],input[type=submit],input[type=button]');
+      if (bt) { ev.preventDefault(); ev.stopPropagation(); hintClick(); }
+    }, true);
 
     // Сайт открыт в другой вкладке на другой странице: подтягиваем её правки.
     window.addEventListener('storage', ev => {
