@@ -24,7 +24,10 @@
    - сетка по кнопке: клетка или колонки, размеры ползунками, к ней тоже прилипает;
    - просмотр страницы с правками на ширине телефона;
    - правки копятся в localStorage по каждой странице и отдаются одним
-     текстом «ПРАВКИ САЙТА · … · записей: N».
+     текстом «ПРАВКИ САЙТА · … · записей: N»;
+   - «Скачать с правками» без ИИ: сдвиги, размеры, новый текст и убранные
+     блоки записываются в исходный файл страницы, он скачивается готовым
+     (несколько страниц архивом). Замечания словами остаются для ИИ.
 
    Настройки (window.PRAVKI_CONFIG, сервер берёт их из .pravki.json):
      name     название сайта для шапки выгрузки
@@ -41,8 +44,10 @@
               сетка: клетка с шагом step или колонки (cols, промежуток, поля,
               по умолчанию отступы кадра, шаг строк row) и селектор кадра.
               Меню «Сетка» меняет вид и размеры, выбор помнит браузер
-     base, baseURL, pagesList, key, opened: для «Открыть папку» на сайте
-              пакета: начало адреса, которое не входит в имя страницы, и список страниц
+     base, baseURL, pagesList, key, opened, srcCache: для «Открыть папку» на сайте
+              пакета: начало адреса, которое не входит в имя страницы, список страниц
+              и хранилище браузера, где рядом со страницей лежит её исходник
+              (адрес страницы + ?pravki-src)
    ============================================================ */
 
 (() => {
@@ -291,14 +296,27 @@
     }
   }
 
+  /* Текстовые блоки по порядку, с адресами. Тем же обходом «Скачать с правками» ищет блоки в исходном файле.
+     Как только блок признан текстовым, внутрь не идём: иначе заголовок
+     из нескольких обёрток дал бы несколько адресов вместо одного. */
+  function eachBlock(root, fn) {
+    const seen = Object.create(null);
+    const walk = el => {
+      for (const kid of el.children) {
+        if (kid.matches(SKIP) || kid.getAttribute('aria-hidden') === 'true') continue;
+        if (!isText(kid)) { walk(kid); continue; }
+        const key = sectionKey(kid) + '.' + kid.tagName.toLowerCase();
+        seen[key] = (seen[key] || 0) + 1;
+        fn(kid, key + '-' + seen[key]);
+      }
+    };
+    walk(root);
+  }
+
   function index() {
     unindex();
-    const seen = Object.create(null);
     blocks = new Map();
-    const add = el => {
-      const key = sectionKey(el) + '.' + el.tagName.toLowerCase();
-      seen[key] = (seen[key] || 0) + 1;
-      const addr = key + '-' + seen[key];
+    eachBlock(document.body, (el, addr) => {
       el.dataset.pvAddr = addr;
       el.dataset.pvCe = '1';
       el.setAttribute('contenteditable', 'plaintext-only');
@@ -307,16 +325,7 @@
       el._pvBefore = norm(rawText(el));
       el._pvBeforeHTML = el.innerHTML;
       blocks.set(addr, el);
-    };
-    // Как только блок признан текстовым, внутрь не идём: иначе заголовок
-    // из нескольких обёрток дал бы несколько адресов вместо одного.
-    const walk = el => {
-      for (const kid of el.children) {
-        if (kid.matches(SKIP) || kid.getAttribute('aria-hidden') === 'true') continue;
-        if (isText(kid)) add(kid); else walk(kid);
-      }
-    };
-    walk(document.body);
+    });
   }
 
   function markNote(el, addr) {
@@ -430,6 +439,13 @@
     const r = ensureRec(el);
     if (m && (m.dx || m.dy || m.w != null || m.h != null)) r.move = m; else delete r.move;
     applyMove(el, r.move || null);
+    // Как сдвиг стоит на странице: «Скачать с правками» повторит это в файле и для других страниц сайта
+    if (r.move) {
+      const p = el.parentElement;
+      r.move.fl = p && /flex/.test(getComputedStyle(p).display) ? 1 : 0;
+      r.move.il = el._pvInline ? 1 : 0;
+      if (el._pvT0[0] || el._pvT0[1]) r.move.t0 = el._pvT0.slice(); else delete r.move.t0;
+    }
     if (!live(r)) {
       delete recs()[r.addr];
       if (el.dataset.pvKind === 'note') unmark(el);
@@ -449,6 +465,13 @@
         try { el = r.sel && document.querySelector(r.sel); } catch {}
         // Блок убрали из файлов: на его месте теперь другой, запись выполнена
         if (el && r.del && r.fp && describe(el) !== r.fp) el = null;
+        // Соседа перед блоком убрали («Скачать с правками» или ИИ), и номер по порядку сменился: ищем блок по описанию
+        if (!r.del && (!el || (el.dataset.pvAddr && el.dataset.pvAddr !== r.addr) || describe(el) !== r.before)) {
+          const tag = ((r.sel || '').match(/([a-z][\w-]*)(?::nth-child\(\d+\))?\s*$/i) || [])[1];
+          const same = tag ? [...document.body.getElementsByTagName(tag)]
+            .filter(c => (!c.dataset.pvAddr || c.dataset.pvAddr === r.addr) && describe(c) === r.before) : [];
+          if (same.length === 1) { el = same[0]; r.sel = cssPath(el); r.where = shortPath(el); }
+        }
         if (!el && r.del) { delete rs[r.addr]; applied++; continue; }
         if (el && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) {
           markNote(el, r.addr);
@@ -690,6 +713,586 @@
     toast('Файл с правками скачан');
   }
 
+  /* ---------- скачать с правками: путь без ИИ ----------
+     Сдвиги, размеры, новый текст и убранные блоки пишутся в исходный текст страницы,
+     а не в снимок живой: иначе в файл попали бы сам режим и всё, что дорисовали скрипты сайта.
+     Исходник берём там же, откуда пришла страница: у «Открыть папку» его копия в хранилище браузера,
+     у сервера и сайта сама страница, из которой вырезаем строки, подключившие режим.
+     Правится только то, что поменяли: остальной текст файла остаётся байт в байт.
+     Сдвиг пишется свойством translate, как в режиме: соседи стоят на местах, вёрстка не едет.
+     Размер, flex и inline-block тоже ровно как в режиме. Замечания словами в файл не попадают, они для ИИ */
+
+  const MARK = 'data-pravki-src';
+  const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+  const RAWTEXT = new Set(['script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes']);
+  const isWS = c => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f';
+
+  /* Теги исходника и их места в тексте. Комментарии и содержимое script, style, textarea пропускаем */
+  function tokenize(src) {
+    const toks = [], n = src.length, NAME = /[a-zA-Z][^\s\/>]*/y;
+    let i = 0;
+    while (i < n) {
+      i = src.indexOf('<', i);
+      if (i < 0) break;
+      const c = src[i + 1];
+      if (src.startsWith('<!--', i)) { const e = src.indexOf('-->', i + 4); i = e < 0 ? n : e + 3; continue; }
+      if (c === '!' || c === '?') { const e = src.indexOf('>', i); i = e < 0 ? n : e + 1; continue; }
+      if (c === '/') {
+        NAME.lastIndex = i + 2;
+        const m = NAME.exec(src), e = src.indexOf('>', i);
+        if (m) toks.push({ type: 'e', name: m[0].toLowerCase(), start: i, stop: e < 0 ? n : e + 1 });
+        i = e < 0 ? n : e + 1;
+        continue;
+      }
+      NAME.lastIndex = i + 1;
+      const m = NAME.exec(src);
+      if (!m) { i++; continue; }
+      const t = { type: 's', name: m[0].toLowerCase(), start: i, nameEnd: i + 1 + m[0].length, attrs: [], sc: false };
+      let j = t.nameEnd;
+      for (;;) {
+        while (j < n && (isWS(src[j]) || (src[j] === '/' && src[j + 1] !== '>'))) j++;
+        if (j >= n) break;
+        if (src[j] === '>') { j++; break; }
+        if (src[j] === '/') { t.sc = true; j += 2; break; }
+        const as = j;
+        while (j < n && !isWS(src[j]) && src[j] !== '/' && src[j] !== '>' && (src[j] !== '=' || j === as)) j++;
+        const name = src.slice(as, j).toLowerCase();
+        let k = j;
+        while (k < n && isWS(src[k])) k++;
+        if (src[k] === '=') {
+          k++;
+          while (k < n && isWS(src[k])) k++;
+          const q = src[k];
+          if (q === '"' || q === "'") { const e = src.indexOf(q, k + 1); j = e < 0 ? n : e + 1; }
+          else { while (k < n && !isWS(src[k]) && src[k] !== '>') k++; j = k; }
+        }
+        t.attrs.push({ name, start: as, end: j });
+      }
+      t.stop = j;
+      toks.push(t);
+      i = j;
+      if (RAWTEXT.has(t.name) && !t.sc) {
+        const re = new RegExp('</' + t.name + '(?=[\\s/>])', 'ig');
+        re.lastIndex = j;
+        const e = re.exec(src);
+        i = e ? e.index : n;
+      }
+    }
+    return toks;
+  }
+
+  /* Каждому открывающему тегу метка с его номером: так у разобранной страницы видно, где в тексте каждый блок */
+  function markSource(src, toks) {
+    let out = '', at = 0;
+    toks.forEach((t, i) => {
+      if (t.type !== 's') return;
+      out += src.slice(at, t.nameEnd) + ' ' + MARK + '="' + i + '"';
+      at = t.nameEnd;
+    });
+    return out + src.slice(at);
+  }
+
+  /* Номер тега первого блока после этого вместе с его содержимым */
+  function nextMarked(el) {
+    let n = el;
+    while (n && !n.nextElementSibling) n = n.parentElement;
+    n = n && n.nextElementSibling;
+    while (n) {
+      if (n.hasAttribute(MARK)) return +n.getAttribute(MARK);
+      if (n.firstElementChild) { n = n.firstElementChild; continue; }
+      while (n && !n.nextElementSibling) n = n.parentElement;
+      n = n && n.nextElementSibling;
+    }
+    return Infinity;
+  }
+
+  /* Где блок в тексте файла: открывающий тег, содержимое, весь блок. Закрывающий тег бывает пропущен (<p>, <li>) */
+  function rangesOf(el, toks, len) {
+    const i = +el.getAttribute(MARK), t = toks[i];
+    const rg = { t, inner: null, outer: [t.start, t.stop] };
+    if (VOID.has(t.name) || t.sc) return rg;
+    let limit = nextMarked(el);
+    if (!(limit > i)) limit = Infinity;
+    const stack = [];
+    for (let j = i + 1; j < toks.length; j++) {
+      const u = toks[j];
+      if (j >= limit) { rg.inner = [t.stop, u.start]; rg.outer = [t.start, u.start]; return rg; }
+      if (u.type === 's') { if (!VOID.has(u.name) && !u.sc) stack.push(u.name); continue; }
+      const k = stack.lastIndexOf(u.name);
+      if (k >= 0) { stack.length = k; continue; }
+      rg.inner = [t.stop, u.start];
+      rg.outer = [t.start, u.name === t.name ? u.stop : u.start];
+      return rg;
+    }
+    rg.inner = [t.stop, len];
+    rg.outer = [t.start, len];
+    return rg;
+  }
+
+  /* Разница двух строк кусками [начало, конец, вставка] в координатах первой */
+  function diffText(a, b) {
+    let p = 0;
+    while (p < a.length && p < b.length && a[p] === b[p]) p++;
+    let s = 0;
+    while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+    const A = a.slice(p, a.length - s), B = b.slice(p, b.length - s);
+    if (!A && !B) return [];
+    const whole = [[p, p + A.length, B]];
+    if (!A || !B || A.length + B.length > 5000) return whole;
+    // Алгоритм Майерса. Длинная переписка целиком идёт одним куском
+    const N = A.length, M = B.length, off = N + M, V = new Int32Array(2 * (N + M) + 2), trace = [];
+    let found = false;
+    for (let d = 0; d <= N + M && !found; d++) {
+      if (d > 400) return whole;
+      trace.push(V.slice());
+      for (let k = -d; k <= d; k += 2) {
+        let x = (k === -d || (k !== d && V[off + k - 1] < V[off + k + 1])) ? V[off + k + 1] : V[off + k - 1] + 1;
+        let y = x - k;
+        while (x < N && y < M && A[x] === B[y]) { x++; y++; }
+        V[off + k] = x;
+        if (x >= N && y >= M) { found = true; break; }
+      }
+    }
+    const ops = [];
+    let x = N, y = M;
+    for (let d = trace.length - 1; d >= 0; d--) {
+      const v = trace[d], k = x - y;
+      const pk = (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) ? k + 1 : k - 1;
+      const px0 = v[off + pk], py0 = px0 - pk;
+      while (x > px0 && y > py0) { ops.push('='); x--; y--; }
+      if (d > 0) { if (x === px0) { ops.push('+' + B[y - 1]); y--; } else { ops.push('-'); x--; } }
+    }
+    ops.reverse();
+    const hunks = [];
+    let ai = 0, cur = null;
+    for (const o of ops) {
+      if (o === '=') { if (cur) { hunks.push(cur); cur = null; } ai++; continue; }
+      if (!cur) cur = [ai, ai, ''];
+      if (o === '-') { ai++; cur[1] = ai; } else cur[2] += o.slice(1);
+    }
+    if (cur) hunks.push(cur);
+    return hunks.map(h => [h[0] + p, h[1] + p, h[2]]);
+  }
+
+  /* Буквы блока по порядку, каждая с местом в разметке. <br> отдельным знаком: его не спутать с переносом строки в исходнике */
+  const BR = '';
+  function unitsOf(root) {
+    const units = [], w = (root.ownerDocument || root).createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      if (n.nodeType === 3) for (let k = 0; k < n.data.length; k++) units.push({ ch: n.data[k], node: n, off: k });
+      else if (n.localName === 'br') units.push({ ch: BR, node: n, br: true });
+    }
+    return units;
+  }
+  // Соседние куски правки склеиваем, если между ними пара букв того же текста: правка слова не рассыпается на буквы
+  function mergeHunks(hunks, A, ok) {
+    const out = [];
+    for (const h of hunks) {
+      const last = out[out.length - 1];
+      if (last && h[0] - last[1] < 3 && ok(last[1], h[0])) { last[2] += A.slice(last[1], h[0]) + h[2]; last[1] = h[1]; }
+      else out.push(h.slice());
+    }
+    return out;
+  }
+
+  /* Новый текст в блок исходника. Разметка внутри (ссылки, жирный) остаётся там, где текст не менялся.
+     Сравниваем буквы исходника с тем, что набрано на странице: перенос строки из исходника так и остаётся
+     пробелом в разметке (в режиме он виден переносом), а нажатый Enter становится <br> */
+  function setText(el, r) {
+    const doc = el.ownerDocument, orig = el.cloneNode(true);
+    const piece = s => {
+      const f = doc.createDocumentFragment();
+      s.split(/[\n]/).forEach((part, i) => {
+        if (i) f.appendChild(doc.createElement('br'));
+        if (part) f.appendChild(doc.createTextNode(part));
+      });
+      return f;
+    };
+    const at = (rg, start, u, after) => u.br
+      ? rg[(start ? 'setStart' : 'setEnd') + (after ? 'After' : 'Before')](u.node)
+      : rg[start ? 'setStart' : 'setEnd'](u.node, u.off + (after ? 1 : 0));
+    const put = (units, [s, e, ins], first, last) => {
+      const rg = doc.createRange();
+      if (e > s) { at(rg, true, units[first(s)], false); at(rg, false, units[last(e - 1)], true); }
+      else if (s > 0) { at(rg, true, units[last(s - 1)], true); rg.collapse(true); }
+      else if (units.length) { at(rg, true, units[0], false); rg.collapse(true); }
+      else { rg.selectNodeContents(el); rg.collapse(false); }
+      rg.deleteContents();
+      if (ins) rg.insertNode(piece(ins));
+    };
+    const back = () => el.replaceChildren(...orig.cloneNode(true).childNodes);
+    const ok = () => norm(rawText(el)) === r.after;
+
+    if (r.afterHTML != null) {
+      const units = unitsOf(el);
+      const tpl = doc.createElement('template');
+      tpl.innerHTML = r.afterHTML;
+      const was = units.map(u => u.ch).join(''), now = unitsOf(tpl.content).map(u => u.ch).join('');
+      const sameText = (a, b) => {
+        const n = units[Math.max(0, a - 1)];
+        for (let i = Math.max(0, a - 1); i <= Math.min(b, units.length - 1); i++) if (units[i].br || units[i].node !== n.node) return false;
+        return true;
+      };
+      const id = i => i;
+      for (const h of mergeHunks(diffText(was, now), was, sameText).reverse()) put(units, h, id, id);
+      if (ok()) return;
+      back();
+    }
+    setTextNorm(el, r.before, r.after, put);
+    if (ok()) return;
+    // Не сошлось по буквам: пишем текст целиком, без разметки внутри
+    el.textContent = '';
+    el.appendChild(piece(r.after));
+  }
+
+  /* Запасной путь: сравнение по тексту, как его видит norm() */
+  function setTextNorm(el, before, after, put) {
+    const units = unitsOf(el).map(u => u.br ? Object.assign({}, u, { ch: '\n' }) : u);
+    // Те же шаги, что у norm(), но каждая буква помнит, из каких мест исходника она собрана
+    let items = [];
+    units.forEach((u, i) => {
+      const last = items[items.length - 1];
+      if (u.ch !== NBSP && u.ch !== '\n' && /\s/.test(u.ch)) {
+        if (last && last.ws) last.b = i; else items.push({ ch: ' ', a: i, b: i, ws: true });
+      } else items.push({ ch: u.ch, a: i, b: i });
+    });
+    let tmp = [];
+    for (const it of items) {
+      const last = tmp[tmp.length - 1];
+      if (it.ch === '\n' && last && last.ws) { tmp.pop(); it.a = last.a; }
+      else if (it.ws && last && last.ch === '\n') { last.b = it.b; continue; }
+      if (it.ch === '\n' && tmp.length && tmp[tmp.length - 1].ch === '\n') { tmp[tmp.length - 1].b = it.b; continue; }
+      tmp.push(it);
+    }
+    while (tmp.length && (tmp[0].ws || tmp[0].ch === '\n')) tmp.shift();
+    while (tmp.length && (tmp[tmp.length - 1].ws || tmp[tmp.length - 1].ch === '\n')) tmp.pop();
+    items = tmp;
+    if (items.map(i => i.ch).join('') !== before) return;
+    // Позиции в units: начало первой буквы куска и конец последней
+    const first = i => items[i].a, last = i => items[i].b;
+    const firstAt = units.length && items.length ? items[0].a : 0;
+    for (const h of diffText(before, after).reverse()) {
+      if (h[1] === h[0] && h[0] === 0 && items.length) put(units, [firstAt, firstAt, h[2]], i => i, i => i);
+      else put(units, h, first, last);
+    }
+  }
+
+  /* Сдвиг и размер стилем в строке, как их ставит режим. Свои стили блока остаются */
+  function splitDecl(s) {
+    const out = [];
+    let cur = '', q = '', depth = 0;
+    for (const c of s) {
+      if (q) { if (c === q) q = ''; }
+      else if (c === '"' || c === "'") q = c;
+      else if (c === '(') depth++;
+      else if (c === ')') depth = Math.max(0, depth - 1);
+      else if (c === ';' && !depth) { if (cur.trim()) out.push(cur.trim()); cur = ''; continue; }
+      cur += c;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+  const pxs = v => Math.round(v * 100) / 100 + 'px';
+  function moveStyle(old, m, f) {
+    const decl = splitDecl(old);
+    let t0 = f.t0;
+    if (!t0) {
+      const d = decl.find(s => /^translate\s*:/i.test(s));
+      const v = d && /:\s*(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?/.exec(d);
+      t0 = v ? [+v[1], +(v[2] || 0)] : [0, 0];
+    }
+    const set = [];
+    if (m.dx || m.dy) set.push(['translate', pxs(t0[0] + m.dx) + ' ' + pxs(t0[1] + m.dy)]);
+    if (m.w != null) set.push(['width', m.w + 'px'], ['max-width', 'none']);
+    if (m.h != null) set.push(['height', m.h + 'px'], ['max-height', 'none']);
+    if (f.flex && (m.w != null || m.h != null)) set.push(['flex', '0 0 auto']);
+    if (f.inline) set.push(['display', 'inline-block']);
+    const names = new Set(set.map(s => s[0]));
+    return decl.filter(s => !names.has(s.split(':')[0].trim().toLowerCase()))
+      .concat(set.map(([k, v]) => k + ': ' + v)).join('; ');
+  }
+  // Как сдвиг стоит на этой странице, а для других страниц как он стоял, когда его делали
+  function factsOf(r, here) {
+    const m = r.move, live = here ? blocks.get(r.addr) : null;
+    if (live && live.isConnected) {
+      keepStyle(live);
+      const p = live.parentElement;
+      return { flex: !!(p && /flex/.test(getComputedStyle(p).display)), inline: !!live._pvInline, t0: live._pvT0 || null };
+    }
+    return { flex: !!m.fl, inline: !!m.il, t0: m.t0 || null };
+  }
+
+  /* Блок записи в разобранном исходнике: текстовый по адресу и тексту, остальной по пути и описанию */
+  const squash = s => (s || '').replace(/[\s\/]+/g, '').toLowerCase();
+  function looksLike(el, d) {
+    if (!d) return true;
+    if (d[0] === '<') { const s = el.getAttribute('src'); return !s || d.includes(s); }
+    return squash(el.textContent).includes(squash(d).slice(0, 24));
+  }
+  function findSrc(D, srcBlocks, used, r, here, textCh) {
+    const ok = el => !!el && !used.has(el) && el.hasAttribute(MARK);
+    const live = here ? blocks.get(r.addr) : null;
+    if (r.kind !== 'note') {
+      const same = srcBlocks.filter(b => ok(b.el) && b.text === r.before);
+      const byAddr = same.find(b => b.addr === r.addr);
+      if (byAddr) return byAddr.el;
+      // Несколько блоков с таким же текстом: берём тот, что на том же месте по счёту
+      if (same.length > 1 && live) {
+        const k = [...blocks.values()].filter(b => b._pvBefore === r.before).indexOf(live);
+        if (same[k]) return same[k].el;
+      }
+      if (same.length) return same[0].el;
+      if (textCh || !live) return null;
+      // Текст на странице дописал скрипт, а сам блок в исходнике есть: сдвиг пишем по его месту
+      let el = null;
+      try { el = D.querySelector(cssPath(live)); } catch {}
+      return ok(el) && el.localName === live.localName ? el : null;
+    }
+    const tag = ((r.sel || '').match(/([a-z][\w-]*)(?::nth-child\(\d+\))?\s*$/i) || [])[1];
+    if (!tag) return null;
+    const like = el => ok(el) && el.localName === tag.toLowerCase() && looksLike(el, r.fp || r.before);
+    let el = null;
+    try { el = D.querySelector(r.sel); } catch {}
+    if (like(el)) return el;
+    const all = [...D.body.getElementsByTagName(tag)].filter(like);
+    return all.length === 1 ? all[0] : null;
+  }
+
+  // Убранный блок забирает и свою строку, если стоял на ней один
+  function lineCut(src, s, e) {
+    let a = s, b = e;
+    while (a > 0 && (src[a - 1] === ' ' || src[a - 1] === '\t')) a--;
+    while (b < src.length && (src[b] === ' ' || src[b] === '\t')) b++;
+    if ((a === 0 || src[a - 1] === '\n') && (b === src.length || src[b] === '\n' || src[b] === '\r')) {
+      if (src[b] === '\r') b++;
+      if (src[b] === '\n') b++;
+      return [a, b, ''];
+    }
+    return [s, e, ''];
+  }
+  // Новый style в открывающем теге: остальные атрибуты не трогаем
+  function styleCut(src, t, style) {
+    const val = 'style="' + style.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '"';
+    const a = t.attrs.find(x => x.name === 'style');
+    if (a) return [a.start, a.end, val];
+    let q = t.stop - 1;
+    if (t.sc && src[q - 1] === '/') q--;
+    while (q > t.nameEnd && isWS(src[q - 1])) q--;
+    return [q, q, ' ' + val];
+  }
+  function innerOf(el) {
+    const c = el.cloneNode(true);
+    c.querySelectorAll('[' + MARK + ']').forEach(n => n.removeAttribute(MARK));
+    return c.innerHTML;
+  }
+  // Строки, которыми сервер, «Открыть папку» или сам человек подключили режим
+  const cleanSource = html => html
+    .replace(/\n<script>window\.PRAVKI_CONFIG=[^\n]*?;<\/script>\n<script src="[^"]*pravki\.js[^"]*" data-auto="1"><\/script>\n/g, '')
+    .replace(/(^|\n)[ \t]*<script\b[^>]*\bsrc\s*=\s*["']?[^"'>\s]*pravki\.js[^>]*>\s*<\/script>[ \t]*(?=\r?\n|$)/gi, '')
+    .replace(/<script\b[^>]*\bsrc\s*=\s*["']?[^"'>\s]*pravki\.js[^>]*>\s*<\/script>/gi, '');
+
+  /* Одна страница: исходник + её записи → новый текст файла и сколько записалось */
+  function writePage(src, list, here) {
+    const toks = tokenize(src);
+    const D = new DOMParser().parseFromString(markSource(src, toks), 'text/html');
+    const srcBlocks = [];
+    eachBlock(D.body, (el, addr) => srcBlocks.push({ el, addr, text: norm(rawText(el)) }));
+    const res = { text: src, done: 0, notes: 0, failed: 0 }, used = new Set(), jobs = [];
+    for (const r of list) {
+      if (r.note && r.note.trim()) res.notes++;
+      const textCh = r.kind !== 'note' && r.after !== r.before;
+      if (!textCh && !hasMove(r) && !r.del) continue;
+      const el = r.lost ? null : findSrc(D, srcBlocks, used, r, here, textCh);
+      if (!el) { res.failed++; continue; }
+      used.add(el);
+      jobs.push({ r, el, textCh, rg: rangesOf(el, toks, src.length) });
+    }
+    // Блок внутри убранного или внутри блока с новым текстом уходит в файл вместе с ним
+    const gone = new Set(jobs.filter(j => j.r.del).map(j => j.el));
+    const dirty = new Set(jobs.filter(j => j.textCh && !j.r.del).map(j => j.el));
+    for (const j of jobs) {
+      for (let p = j.el.parentElement; p; p = p.parentElement) if (gone.has(p) || dirty.has(p)) { j.inside = true; break; }
+    }
+    for (const j of jobs) if (j.textCh && !j.r.del) setText(j.el, j.r);
+    for (const j of jobs) {
+      if (hasMove(j.r) && !j.r.del) j.el.setAttribute('style', moveStyle(j.el.getAttribute('style') || '', j.r.move, factsOf(j.r, here)));
+    }
+    for (const j of jobs) if (j.r.del) j.el.remove();
+    const cuts = [];
+    for (const j of jobs) {
+      res.done++;
+      if (j.inside) continue;
+      if (j.r.del) { cuts.push(lineCut(src, j.rg.outer[0], j.rg.outer[1])); continue; }
+      if (j.textCh && j.rg.inner) cuts.push([j.rg.inner[0], j.rg.inner[1], innerOf(j.el)]);
+      if (hasMove(j.r)) cuts.push(styleCut(src, j.rg.t, j.el.getAttribute('style')));
+    }
+    cuts.sort((x, y) => y[0] - x[0] || y[1] - x[1]);
+    let text = src, lim = Infinity;
+    for (const [s, e, v] of cuts) {
+      if (e > lim) continue;
+      text = text.slice(0, s) + v + text.slice(e);
+      lim = s;
+    }
+    res.text = cleanSource(text);
+    return res;
+  }
+
+  /* Исходник страницы: копия из «Открыть папку», выбранный человеком файл или сама страница с сайта */
+  const canon = p => { try { p = decodeURIComponent(p); } catch {} return p.split('/').map(encodeURIComponent).join('/'); };
+  async function sourceOf(p, picked) {
+    if (picked) {
+      const name = p.split('/').pop();
+      return picked.get(p) ?? picked.get(name) ?? (picked.size === 1 ? [...picked.values()][0] : null);
+    }
+    const url = new URL(p === PAGE ? location.href : pageURL(p), location.href);
+    if (CFG.srcCache && window.caches) {
+      try {
+        const hit = await (await caches.open(CFG.srcCache)).match(url.origin + canon(url.pathname) + '?pravki-src');
+        if (hit) return await hit.text();
+      } catch {}
+    }
+    try {
+      url.hash = '';
+      const res = await fetch(url.href, { cache: 'no-store' });
+      return res.ok ? await res.text() : null;
+    } catch { return null; }
+  }
+
+  const writable = r => (r.kind !== 'note' && r.after !== r.before) || hasMove(r) || !!r.del;
+  const hasNote = r => !!(r.note && r.note.trim());
+
+  /* Все страницы с правками → файлы с правками. Его же отдаёт __pravki.files() */
+  async function buildFiles(picked) {
+    const out = { files: [], done: 0, notes: 0, failed: 0, unread: [] };
+    for (const p of pageOrder()) {
+      const list = liveRecs(p);
+      if (!list.some(writable)) { out.notes += list.filter(hasNote).length; continue; }
+      const src = await sourceOf(p, picked);
+      if (src == null) {
+        out.unread.push(p);
+        out.notes += list.filter(hasNote).length;
+        continue;
+      }
+      const res = writePage(src, list, p === PAGE);
+      out.done += res.done;
+      out.notes += res.notes;
+      out.failed += res.failed;
+      if (res.done) out.files.push({ path: p, text: res.text });
+    }
+    return out;
+  }
+
+  /* Архив zip без сжатия: несколько страниц одним файлом, без библиотек */
+  const CRC = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(b) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function zip(files) {
+    const enc = new TextEncoder(), parts = [], dir = [], d = new Date();
+    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    let off = 0;
+    for (const f of files) {
+      const name = enc.encode(f.path), data = enc.encode(f.text), crc = crc32(data);
+      const h = new DataView(new ArrayBuffer(30));
+      // 0x0800: имена файлов в UTF-8, иначе русские имена в архиве ломаются
+      [[0, 0x04034b50, 4], [4, 20], [6, 0x0800], [8, 0], [10, time], [12, date], [14, crc, 4],
+        [18, data.length, 4], [22, data.length, 4], [26, name.length], [28, 0]]
+        .forEach(([o, v, s]) => s === 4 ? h.setUint32(o, v, true) : h.setUint16(o, v, true));
+      parts.push(h, name, data);
+      const c = new DataView(new ArrayBuffer(46));
+      [[0, 0x02014b50, 4], [4, 20], [6, 20], [8, 0x0800], [10, 0], [12, time], [14, date], [16, crc, 4],
+        [20, data.length, 4], [24, data.length, 4], [28, name.length], [30, 0], [32, 0], [34, 0], [36, 0],
+        [38, 0, 4], [42, off, 4]]
+        .forEach(([o, v, s]) => s === 4 ? c.setUint32(o, v, true) : c.setUint16(o, v, true));
+      dir.push(c, name);
+      off += 30 + name.length + data.length;
+    }
+    const size = dir.reduce((n, p) => n + p.byteLength, 0);
+    const e = new DataView(new ArrayBuffer(22));
+    e.setUint32(0, 0x06054b50, true);
+    e.setUint16(8, files.length, true);
+    e.setUint16(10, files.length, true);
+    e.setUint32(12, size, true);
+    e.setUint32(16, off, true);
+    return new Blob([...parts, ...dir, e], { type: 'application/zip' });
+  }
+
+  // Ссылку не вставляем в страницу: иначе её щелчок перехватил бы сам режим
+  function saveBlob(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  const forms = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11) ? one
+    : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? few : many;
+
+  async function saveEdited(picked) {
+    let out;
+    try { out = await buildFiles(picked); }
+    catch (e) {
+      console.error('Режим правок, «Скачать с правками»:', e);
+      note('Собрать файл не получилось. Отдайте правки ИИ через «Скопировать правки»');
+      return;
+    }
+    const msg = [];
+    if (out.files.length === 1) {
+      const name = out.files[0].path.split('/').pop();
+      saveBlob(new Blob([out.files[0].text], { type: 'text/html;charset=utf-8' }), name);
+      msg.push('Скачан «' + name + '», в нём ' + out.done + ' ' + forms(out.done, 'правка', 'правки', 'правок') + '. Замените им старый файл');
+    } else if (out.files.length > 1) {
+      const name = SITE + ' с правками.zip';
+      saveBlob(zip(out.files), name);
+      const k = out.files.length;
+      msg.push('Скачан архив «' + name + '», в нём ' + k + ' ' + forms(k, 'страница', 'страницы', 'страниц') + ' с правками. Замените ими старые файлы');
+    } else if (!out.failed && !out.unread.length) {
+      msg.push('В файл записывать нечего');
+    }
+    if (out.unread.length) {
+      msg.push('Не прочитался исходный файл ' + (out.unread.length === 1 ? 'страницы «' + out.unread[0] + '», её правки' :
+        'страниц ' + out.unread.map(p => '«' + p + '»').join(', ') + ', их правки') + ' отдайте ИИ');
+    }
+    if (out.failed) {
+      const one = out.failed === 1;
+      msg.push(out.failed + ' ' + forms(out.failed, 'правка не записалась', 'правки не записались', 'правок не записались') +
+        (one ? ', этого блока нет в исходном файле. Её отдайте ИИ' : ', этих блоков нет в исходном файле. Их отдайте ИИ'));
+    }
+    if (out.notes) msg.push('Замечания словами в файл не попали. Откройте новый файл в режиме правок, в списке останутся только они для ИИ');
+    note(msg.join('. '));
+  }
+
+  function saveClick() {
+    if (!total()) { toast('Пока нечего скачивать'); return; }
+    const ed = editingEl();
+    if (ed) ed.blur();
+    // Страницу, открытую файлом, браузер прочитать не даёт: человек выбирает тот же файл сам
+    if (location.protocol === 'file:') {
+      toast('Браузер не даёт прочитать файл сам. Выберите этот же файл ещё раз');
+      ui.pick.onchange = async () => {
+        const map = new Map();
+        for (const f of ui.pick.files) map.set(f.name, await f.text());
+        ui.pick.value = '';
+        if (map.size) saveEdited(map);
+      };
+      ui.pick.click();
+      return;
+    }
+    saveEdited(null);
+  }
+
   /* ---------- остановить анимации и показать скрытое ---------- */
 
   function freeze() {
@@ -778,6 +1381,11 @@
     .bar button.go{background:#1F9EEB;font-weight:600;padding:0 16px}
     .bar button.go:hover{background:#0090DB}
     .bar.wrap{border-radius:22px}
+    /* Капсула в одну строку: на средней ширине у «Скачать с правками» остаётся значок, подпись в подсказке */
+    @media (max-width:980px){
+      .bar #save .lb{display:none}
+      .bar #save{width:34px;padding:0;justify-content:center}
+    }
     @media (max-width:820px){
       .bar .lb,.bar .t{display:none}
       .bar button.full:not(.ic):not(.go){width:34px;padding:0;justify-content:center}
@@ -944,6 +1552,7 @@
       eyeOff: '<path d="M2 7.5s2.2 3 6 3 6-3 6-3"/><path d="M4.2 9.6 3 11.2M8 10.5v2M11.8 9.6l1.2 1.6"/>',
       x: '<path d="M4 4l8 8M12 4l-8 8"/>',
       help: '<circle cx="8" cy="8" r="6"/><path d="M6.4 6.3a1.7 1.7 0 0 1 3.2.6c0 1.1-1.6 1.4-1.6 2.4"/><path d="M8 11.4v.1"/>',
+      down: '<path d="M8 2.5v8"/><path d="M4.6 7.4 8 10.8l3.4-3.4"/><path d="M3 13.5h10"/>',
     };
 
     const EYE_OFF = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
@@ -973,6 +1582,9 @@
           '<button class="full" id="gridBtn" title="Клетка или колонки, края встают по ним">' + ICON('grid') + '<span class="lb">Сетка</span></button>' +
           '<button class="full" id="phoneBtn" title="Страница с правками шириной 390 px">' + ICON('phone') + '<span class="lb">Телефон</span></button>' +
           '<button class="full" id="list">' + ICON('list') + '<span class="lb">Список</span></button>' +
+          '<button class="full" id="save" title="Скачать этот же файл, где уже стоят сдвиги, размеры и новый текст. ' +
+            'Замечания словами в него не попадут, их отдайте ИИ">' + ICON('down') + '<span class="lb">Скачать с правками</span></button>' +
+          '<input type="file" id="pick" accept=".html,.htm,text/html" multiple hidden>' +
           '<button class="go full" id="copy">Скопировать правки</button>' +
           '<div class="note" id="note"><span id="noteText"></span>' +
             '<button class="nx" id="noteX" title="Закрыть" aria-label="Закрыть">' + ICON('x') + '</button></div>' +
@@ -1011,7 +1623,8 @@
               '<span>' + k(CMD) + ' + щелчок</span><span>открыть ссылку или нажать кнопку</span>' +
               '<span>' + k('Delete') + '</span><span>убрать выбранный блок, ещё раз вернуть</span>' +
             '</div>' +
-            '<p class="foot">Правки хранятся в этом браузере, сайт не меняется. «Скопировать правки» отдаёт их ИИ одним сообщением</p>' +
+            '<p class="foot">Правки хранятся в этом браузере, сайт не меняется. «Скопировать правки» отдаёт их ИИ одним сообщением. ' +
+              '«Скачать с правками» даёт готовый файл со сдвигами и новым текстом, без замечаний</p>' +
           '</div>' +
           '</div>' +
         '</aside>' +
@@ -1035,6 +1648,7 @@
       lbl: $('lbl'), toast: $('toast'), help: $('help'), modal: $('modal'), mtext: $('mtext'),
       box: $('box'), hdl: $('hdl'), hov: $('hov'), dim: $('dim'), guides: $('guides'), cols: $('cols'),
       undo: $('undo'), redo: $('redo'), gridBtn: $('gridBtn'), gm: $('gm'), cell: $('cell'), ph: $('ph'), phf: $('phf'),
+      pick: $('pick'),
     };
     $('mclose').addEventListener('click', () => ui.modal.classList.remove('on'));
     ui.modal.addEventListener('keydown', e => { if (e.key === 'Escape') ui.modal.classList.remove('on'); });
@@ -1051,6 +1665,7 @@
     });
 
     $('copy').addEventListener('click', copy);
+    $('save').addEventListener('click', saveClick);
     $('file').addEventListener('click', download);
     $('list').addEventListener('click', () => { ui.side.classList.toggle('on'); render(); });
     $('hide').addEventListener('click', () => ui.side.classList.remove('on'));
@@ -2218,6 +2833,9 @@
     window.__pravki = {
       text: build, count: total, clear: clearAll, drop, reindex: () => { index(); restore(); render(); },
       reveal, data: () => JSON.parse(JSON.stringify(store)), page: PAGE, undo, redo,
+      // Файлы с правками без скачивания: { files: [{ path, text }], done, notes, failed, unread }.
+      // Можно отдать исходники самому: Map «страница → текст файла»
+      files: src => buildFiles(src instanceof Map ? src : null), save: () => saveEdited(null),
     };
     // Режим скрыли глазом в этой вкладке: на новой странице он тоже скрыт. Закладку нажали сами, значит показываем
     if (isOff() && !LATE) setHidden(true);
