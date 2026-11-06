@@ -19,6 +19,12 @@ pravki.js. Файлы сайта не меняются, поэтому режи�
 в шапке pravki.js.
 
 Служебные адреса: /__pravki/pravki.js, /__pravki/info, /__pravki/pages.
+Страница с ?pravki-src в адресе отдаётся как есть, без режима: из неё
+«Скачать с правками» собирает файл.
+
+Строку запрета скриптов в самой странице (meta Content-Security-Policy, её
+ставят некоторые ИИ) сервер снимает только в копии для браузера, иначе режим
+не запустится. Файл на диске не меняется, в «Скачать с правками» она остаётся.
 """
 
 import argparse
@@ -78,8 +84,13 @@ def make_snippet(cfg):
             '<script src="/__pravki/pravki.js" data-auto="1"></script>\n' % js).encode('utf-8')
 
 
+CSP_META = re.compile(rb'<meta\b[^>]*http-equiv\s*=\s*["\']?content-security-policy["\']?[^>]*>', re.I)
+
+
 def inject(data, snippet):
-    """Перед последним </body>, а если его нет, перед </html> или в конец."""
+    """Перед последним </body>, а если его нет, перед </html> или в конец.
+    Строку запрета скриптов снимаем: с ней браузер не даст режиму запуститься."""
+    data = CSP_META.sub(b'', data)
     for tag in (rb'</body\s*>', rb'</html\s*>'):
         found = list(re.finditer(tag, data, re.I))
         if found:
@@ -131,8 +142,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return super().send_head()          # список файлов
         if path.lower().endswith(('.html', '.htm')) and os.path.isfile(path):
             with open(path, 'rb') as f:
-                data = inject(f.read(), srv.snippet)
-            return self._bytes(data, 'text/html; charset=utf-8')
+                data = f.read()
+            # Исходник как есть, со строкой запрета скриптов: из него «Скачать с правками» собирает файл
+            if re.search(r'(^|&)pravki-src(=|&|$)', urllib.parse.urlsplit(self.path).query):
+                return self._bytes(data, 'text/plain; charset=utf-8')
+            return self._bytes(inject(data, srv.snippet), 'text/html; charset=utf-8')
         return super().send_head()
 
 

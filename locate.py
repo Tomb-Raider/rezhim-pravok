@@ -7,8 +7,11 @@
 
 Папку берёт из строки «папка: …» пакета, если --root не указан.
 Ищет текст «было» (а для замечаний без правки сам текст блока) сначала
-в файле страницы и в файле-источнике из пометки, потом во всех текстовых
-файлах папки. Теги, &nbsp;, \\u00a0 и переносы при поиске не мешают.
+в файле страницы из строки «═══» и в файле-источнике из пометки, потом во всех
+текстовых файлах папки. Совпадения в других файлах помечает «неточно»: короткий
+текст легко найдётся не там. Внутри картинок data: и внутри <script> страниц
+не ищет, кроме последней попытки в <script> своей страницы с пометкой.
+Теги, &nbsp;, \\u00a0 и переносы при поиске не мешают.
 Для замечаний к блоку целиком ищет id из строки «где:», для картинок
 имя файла. Строки сдвига и удаления («сдвиг:», «размер:», «выровнено:», «удалить:») печатает как есть.
 
@@ -26,6 +29,9 @@ TEXT_EXT = ('.html', '.htm', '.js', '.mjs', '.css', '.py', '.json', '.md', '.txt
 SKIP_DIR = re.compile(r'^(\.|_deploy$|deploy_|node_modules|__pycache__|архив|Архив|archive)', re.I)
 INLINE = {'a', 'b', 'i', 'em', 'strong', 'span', 'small', 'sup', 'sub', 'mark', 'u', 's', 'code',
           'abbr', 'nobr', 'wbr', 'q', 'cite', 'time', 'label', 'font', 'del', 'ins', 'kbd'}
+# Куски, где текст страницы не живёт: картинки data: и код внутри <script>
+DATA_URI = re.compile(r'data:[\w.+/-]+(?:;[\w.=-]+)*,[^"\'\s)<>]*', re.I)
+SCRIPT = re.compile(r'(<script\b[^>]*>)(.*?)(</script\s*>)', re.I | re.S)
 TOKEN = re.compile(r'<[a-zA-Z/!][^<>]{0,400}>|&#?[a-zA-Z0-9]{1,10};|\\u[0-9a-fA-F]{4}|\\n|\s+|.', re.S)
 
 
@@ -55,6 +61,18 @@ def normalize(text):
             out.append(c)
             pos.append(m.start())
     return ''.join(out), pos
+
+
+def blank(s):
+    """Кусок пробелами той же длины: смещения и номера строк не съезжают."""
+    return re.sub(r'[^\n]', ' ', s)
+
+
+def mask(path, raw, scripts=True):
+    raw = DATA_URI.sub(lambda m: blank(m.group()), raw)
+    if scripts and path.lower().endswith(('.html', '.htm', '.svg')):
+        raw = SCRIPT.sub(lambda m: m.group(1) + blank(m.group(2)) + m.group(3), raw)
+    return raw
 
 
 def needle_of(s):
@@ -114,14 +132,16 @@ class Index:
                         self.all.append(p)
         return self.all
 
-    def get(self, path):
-        if path not in self.cache:
+    def get(self, path, scripts=False):
+        """Текст файла и его разбор без картинок data: и, если scripts=False, без кода в <script>."""
+        key = (path, scripts)
+        if key not in self.cache:
             try:
                 raw = open(path, encoding='utf-8', errors='replace').read()
             except OSError:
                 raw = ''
-            self.cache[path] = (raw,) + normalize(raw)
-        return self.cache[path]
+            self.cache[key] = (raw,) + normalize(mask(path, raw, scripts=not scripts))
+        return self.cache[key]
 
     def find_raw(self, path, needle, limit=3):
         """Поиск как есть, без разбора тегов: для имени файла картинки в src."""
@@ -134,8 +154,8 @@ class Index:
             i = raw.find(needle, i + 1)
         return hits
 
-    def find(self, path, needle, limit=3):
-        raw, norm, pos = self.get(path)
+    def find(self, path, needle, limit=3, scripts=False):
+        raw, norm, pos = self.get(path, scripts)
         hits, i = [], norm.find(needle)
         while i != -1 and len(hits) < limit:
             off = pos[i]
@@ -148,7 +168,8 @@ class Index:
         return hits
 
 
-def candidates(root, rec, idx):
+def own_files(root, rec):
+    """Файлы самой записи: её страница из строки «═══», сборщик страницы и источник из пометки."""
     first = []
     for rel in (rec['page'], rec['page_src'], *rec['flags']):
         if not rel:
@@ -157,14 +178,33 @@ def candidates(root, rec, idx):
         p = os.path.join(root, rel)
         if os.path.isfile(p) and p not in first:
             first.append(p)
+    return first
+
+
+def candidates(root, rec, idx):
+    first = own_files(root, rec)
     return first + [p for p in idx.files() if p not in first]
 
 
-def search(root, rec, idx, needle):
+def label(root, rec, p, kind):
+    """Совпадение не в файлах записи помечаем: короткий текст легко найдётся на чужой странице."""
+    if not rec['page'] or p in own_files(root, rec):
+        return kind
+    where = 'другая страница' if p.lower().endswith(('.html', '.htm')) else 'другой файл'
+    return ('' if kind == 'точно' else kind + ', ') + 'неточно: ' + where
+
+
+def search(root, rec, idx, needle, own=True):
+    """own=True: только файлы записи (если страница записи известна), иначе все остальные."""
+    mine = own_files(root, rec)
+    if not rec['page']:
+        paths = candidates(root, rec, idx) if own else []
+    else:
+        paths = mine if own else [p for p in idx.files() if p not in mine]
     found = []
-    for p in candidates(root, rec, idx):
+    for p in paths:
         for line_no, snip in idx.find(p, needle):
-            found.append((os.path.relpath(p, root), line_no, snip))
+            found.append((p, line_no, snip))
         if len(found) >= 3:
             break
     return found
@@ -214,17 +254,32 @@ def main():
         lines = []
         if src and not src.startswith('<'):
             needle = needle_of(src)
-            found = search(root, r, idx, needle)
-            kind = 'точно'
-            # Текст мог собираться скриптом из кусков: ищем начало и конец по отдельности.
-            if not found and len(needle) > 36:
-                for part, label in ((needle[:30], 'по началу'), (needle[-30:], 'по концу')):
-                    found = search(root, r, idx, part.strip())
-                    if found:
-                        kind = label
-                        break
-            for f, ln, snip in found:
-                lines.append('    %s:%d  %s  │ %s' % (f, ln, kind, snip))
+            found, kind = [], 'точно'
+            # Сначала файлы записи, потом остальные. Текст мог собираться скриптом из кусков:
+            # тогда ищем начало и конец по отдельности
+            for own in (True, False):
+                found = search(root, r, idx, needle, own)
+                if not found and len(needle) > 36:
+                    for part, how in ((needle[:30], 'по началу'), (needle[-30:], 'по концу')):
+                        found = search(root, r, idx, part.strip(), own)
+                        if found:
+                            kind = how
+                            break
+                if found:
+                    if own:
+                        # Тот же текст в других файлах: для сведения, с пометкой
+                        more = [h for h in search(root, r, idx, needle, False)] if kind == 'точно' and r['page'] else []
+                        found += more[:max(0, 3 - len(found))]
+                    break
+            for p, ln, snip in found:
+                lines.append('    %s:%d  %s  │ %s' % (os.path.relpath(p, root), ln, label(root, r, p, kind), snip))
+            if not found and r['page']:
+                # Последняя попытка: код в <script> самой страницы, текст мог собираться им
+                p = os.path.join(root, r['page'])
+                if os.path.isfile(p):
+                    for ln, snip in idx.find(p, needle, scripts=True):
+                        lines.append('    %s:%d  в <script> страницы, проверь  │ %s' % (r['page'], ln, snip))
+                        found = True
             if not found:
                 lines.append('    текст не найден: возможно, собирается скриптом или уже изменён')
         elif src:
@@ -234,7 +289,7 @@ def main():
                 found = []
                 for p in candidates(root, r, idx):
                     for ln, snip in idx.find_raw(p, m.group(1)):
-                        found.append('    %s:%d  по файлу  │ %s' % (os.path.relpath(p, root), ln, snip))
+                        found.append('    %s:%d  %s  │ %s' % (os.path.relpath(p, root), ln, label(root, r, p, 'по файлу'), snip))
                     if len(found) >= 3:
                         break
                 lines.extend(found or ['    файл %s в исходниках не найден' % m.group(1)])

@@ -44,10 +44,11 @@
               сетка: клетка с шагом step или колонки (cols, промежуток, поля,
               по умолчанию отступы кадра, шаг строк row) и селектор кадра.
               Меню «Сетка» меняет вид и размеры, выбор помнит браузер
-     base, baseURL, pagesList, key, opened, srcCache: для «Открыть папку» на сайте
-              пакета: начало адреса, которое не входит в имя страницы, список страниц
+     base, baseURL, pagesList, key, opened, openedAt, openedAs, srcCache: для «Открыть папку»
+              на сайте пакета: начало адреса, которое не входит в имя страницы, список страниц,
+              когда открыли папку и что выбрали (dir папку или file файлы)
               и хранилище браузера, где рядом со страницей лежит её исходник
-              (адрес страницы + ?pravki-src)
+              (адрес страницы + ?pravki-src). Сервер отдаёт исходник по тому же адресу
    ============================================================ */
 
 (() => {
@@ -113,6 +114,18 @@
     } catch {}
   }
   function saveAll() { if (!PREVIEW) try { localStorage.setItem(KEY, JSON.stringify(store)); } catch {} }
+  // Общее поле хранилища, не страницы: тоже поверх свежей копии
+  function saveTop(k, v) {
+    store[k] = v;
+    if (PREVIEW) return;
+    try {
+      const fresh = load();
+      fresh[k] = v;
+      fresh.pages[PAGE] = page();
+      store = fresh;
+      localStorage.setItem(KEY, JSON.stringify(store));
+    } catch {}
+  }
 
   /* Запись живая, если в ней есть правка текста, сдвиг, удаление блока или непустое замечание. */
   const hasMove = r => !!(r.move && (r.move.dx || r.move.dy || r.move.w != null || r.move.h != null));
@@ -457,6 +470,9 @@
   /* Возвращаем правки после перезагрузки. Правка, которую уже внесли в файлы
      (на странице теперь текст «стало» или блок уже на новом месте), убирается сама. */
   let applied = 0;
+  /* Как правки от прошлого раза легли на страницу: exact нашлись по тексту или описанию, miss нет,
+     sure что-то из них уже стоит в файлах. По этому видно, та ли это папка и цела ли история «Назад» */
+  const found = { n: 0, exact: 0, miss: 0, sure: false, moved: false };
   function restore() {
     const rs = recs();
     for (const r of Object.values(rs)) {
@@ -470,17 +486,19 @@
           const tag = ((r.sel || '').match(/([a-z][\w-]*)(?::nth-child\(\d+\))?\s*$/i) || [])[1];
           const same = tag ? [...document.body.getElementsByTagName(tag)]
             .filter(c => (!c.dataset.pvAddr || c.dataset.pvAddr === r.addr) && describe(c) === r.before) : [];
-          if (same.length === 1) { el = same[0]; r.sel = cssPath(el); r.where = shortPath(el); }
+          if (same.length === 1) { el = same[0]; r.sel = cssPath(el); r.where = shortPath(el); found.moved = true; }
         }
-        if (!el && r.del) { delete rs[r.addr]; applied++; continue; }
+        if (!el && r.del) { delete rs[r.addr]; applied++; found.moved = true; continue; }
+        found.n++;
         if (el && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) {
+          if (describe(el) === (r.del && r.fp ? r.fp : r.before)) found.exact++; else { found.miss++; found.moved = true; }
           markNote(el, r.addr);
           if (r.del) applyDel(el, true);
           if (r.note && r.note.trim()) el.dataset.pvNote = '1';
           delete r.lost;
-          if (r.move && settleMove(el, r)) applied++;
+          if (r.move && settleMove(el, r)) { applied++; found.sure = true; }
           if (!live(r)) { unmark(el); delete rs[r.addr]; } else r.pos = posOf(el);
-        } else r.lost = true;
+        } else { r.lost = true; found.miss++; found.moved = true; }
         continue;
       }
       let el = blocks.get(r.addr);
@@ -488,17 +506,20 @@
         // Адрес съехал (на странице добавился блок): ищем по исходному тексту, потом по новому.
         const free = b => !rs[b.dataset.pvAddr];
         const all = [...blocks.values()];
-        const found = all.find(b => b._pvBefore === r.before && free(b)) ||
+        const hit = all.find(b => b._pvBefore === r.before && free(b)) ||
           (r.after !== r.before && all.find(b => b._pvBefore === r.after && free(b)));
-        if (found) {
+        if (hit) {
           delete rs[r.addr];
-          r.addr = found.dataset.pvAddr;
+          r.addr = hit.dataset.pvAddr;
           rs[r.addr] = r;
-          el = found;
+          el = hit;
+          found.moved = true;
         } else el = null;
       }
-      if (!el && r.del) { delete rs[r.addr]; applied++; continue; }
-      if (!el) { r.lost = true; continue; }
+      if (!el && r.del) { delete rs[r.addr]; applied++; found.moved = true; continue; }
+      found.n++;
+      if (!el) { r.lost = true; found.miss++; found.moved = true; continue; }
+      found.exact++;
       delete r.lost;
       if (r.del) applyDel(el, true);
       if (r.after !== r.before && el._pvBefore === r.after) {
@@ -506,16 +527,18 @@
         r.before = r.after;
         r.note = '';
         applied++;
+        found.sure = true;
       }
       if (r.after !== r.before) {
         el.innerHTML = r.afterHTML;
         el.dataset.pvChanged = '1';
       }
       if (r.note && r.note.trim()) el.dataset.pvNote = '1';
-      if (r.move && settleMove(el, r)) applied++;
+      if (r.move && settleMove(el, r)) { applied++; found.sure = true; }
       if (!live(r)) { delete rs[r.addr]; continue; }
       r.pos = posOf(el);
     }
+    if (applied) found.moved = true;
     page().title = document.title;
     save();
   }
@@ -595,8 +618,8 @@
   function clearAll() {
     for (const addr of Object.keys(recs())) drop(addr);
     store = { pages: {} };
-    saveAll();
     hist.back = []; hist.fwd = [];
+    saveAll();
     paintHist();
     render();
   }
@@ -1153,6 +1176,8 @@
     }
     try {
       url.hash = '';
+      // Сервер режима отдаёт по этому адресу файл как есть: в копии для браузера он снял строку запрета скриптов
+      if (CFG.server) url.search = '?pravki-src';
       const res = await fetch(url.href, { cache: 'no-store' });
       return res.ok ? await res.text() : null;
     } catch { return null; }
@@ -1270,8 +1295,25 @@
       msg.push(out.failed + ' ' + forms(out.failed, 'правка не записалась', 'правки не записались', 'правок не записались') +
         (one ? ', этого блока нет в исходном файле. Её отдайте ИИ' : ', этих блоков нет в исходном файле. Их отдайте ИИ'));
     }
-    if (out.notes) msg.push('Замечания словами в файл не попали. Откройте новый файл в режиме правок, в списке останутся только они для ИИ');
+    const many = out.files.length > 1;
+    if (out.notes) {
+      msg.push(many ? 'Замечания словами в файлы не попали. Откройте новые файлы в режиме правок, в списке останутся только они для ИИ'
+        : 'Замечания словами в файл не попали. Откройте новый файл в режиме правок, в списке останутся только они для ИИ');
+    }
+    // «Открыть папку» отдаёт файл таким, каким он был при открытии: если его с тех пор поменяли, это видно только так
+    if (out.files.length && CFG.opened && CFG.openedAt) {
+      const again = CFG.openedAs === 'file' ? (many ? 'файлы' : 'файл') : 'папку';
+      msg.push((many ? 'Файлы собраны из версий, открытых ' : 'Файл собран из версии, открытой ') + when(CFG.openedAt) +
+        '. Если ' + (many ? 'файлы с тех пор менялись' : 'файл с тех пор менялся') + ', откройте ' + again + ' заново и скачайте ещё раз');
+    }
     note(msg.join('. '));
+  }
+
+  // «в 01:27», а не сегодня «05.11 в 23:10»
+  function when(ts) {
+    const d = new Date(ts), p = n => String(n).padStart(2, '0');
+    const t = 'в ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    return d.toDateString() === new Date().toDateString() ? t : p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + t;
   }
 
   function saveClick() {
@@ -1335,13 +1377,14 @@
   /* ---------- интерфейс ---------- */
 
   const PAGE_CSS = `
-    html:not([data-pv-off]) [data-pv-addr]{outline-offset:3px;transition:background-color .12s}
-    html:not([data-pv-off]) [data-pv-addr]:not([data-pv-kind]):hover{outline:1px dashed #7FA98A;background-color:rgba(33,160,56,.08)}
+    /* Подсветка только обводкой, без заливки: заливка поверх тёмной кнопки съедает контраст белого текста */
+    html:not([data-pv-off]) [data-pv-addr]{outline-offset:3px}
+    html:not([data-pv-off]) [data-pv-addr]:not([data-pv-kind]):hover{outline:1px dashed #7FA98A}
     html:not([data-pv-off]) [data-pv-ce]:not(:focus){cursor:default}
-    html:not([data-pv-off]) [data-pv-addr]:focus{outline:2px solid #21A038!important;outline-offset:3px;background-color:rgba(33,160,56,.12)}
-    html:not([data-pv-off]) [data-pv-changed]{outline:1px solid #21A038;background-color:rgba(33,160,56,.16)}
-    html:not([data-pv-off]) [data-pv-note]{outline:1px solid #E0C400;background-color:rgba(224,196,0,.20)}
-    html:not([data-pv-off]) [data-pv-kind="note"]:not([data-pv-moved]){outline:2px solid #E0C400;outline-offset:2px;background-color:rgba(224,196,0,.08)}
+    html:not([data-pv-off]) [data-pv-addr]:focus{outline:2px solid #21A038!important;outline-offset:3px}
+    html:not([data-pv-off]) [data-pv-changed]{outline:2px solid #21A038}
+    html:not([data-pv-off]) [data-pv-note]{outline:2px solid #E0C400}
+    html:not([data-pv-off]) [data-pv-kind="note"]:not([data-pv-moved]){outline:2px solid #E0C400;outline-offset:2px}
     html:not([data-pv-off]) [data-pv-moved]:not([data-pv-note]):not([data-pv-changed]):not(:focus){outline:1px solid rgba(76,141,255,.75);outline-offset:2px}
     html:not([data-pv-off]) [data-pv-hover]{outline:2px solid #E0C400!important;outline-offset:2px;cursor:crosshair!important}
     html:not([data-pv-off]) [data-pv-sel]:not(:focus):not([data-pv-hover]){outline-color:transparent!important}
@@ -1612,15 +1655,15 @@
           '<div class="help" id="help">' +
             '<div class="hh"><b>Клавиши</b><button class="x" id="helpX" title="Закрыть" aria-label="Закрыть">✕</button></div>' +
             '<div class="keys">' +
-              '<span>Тянуть мышью</span><span>двигать фото и блоки, края прилипают к соседям</span>' +
+              '<span>Тянуть мышью</span><span>двигать фото и блоки, края прилипают к соседям. Сдвинутый блок соседей не двигает, как в Figma</span>' +
               '<span>' + k(CMD) + ' + тянуть</span><span>без привязки</span>' +
               '<span>' + k('Shift') + ' + тянуть</span><span>взять блок уровнем выше</span>' +
               '<span>Стрелки</span><span>сдвиг на 1 px, с ' + k('Shift') + ' на 10</span>' +
-              '<span>Двойной щелчок</span><span>править текст, ' + k('Esc') + ' закончить</span>' +
+              '<span>Двойной щелчок</span><span>править текст, ' + k('Enter') + ' переносит строку, ' + k('Esc') + ' закончить</span>' +
               '<span>' + k('Ctrl') + ' + ' + k('Shift') + ' + пробел</span><span>неразрывный пробел' + (MAC ? ', или ' + k('Alt') + ' + пробел' : '') + '</span>' +
               '<span>' + k('Alt') + ' + щелчок</span><span>замечание к чему угодно</span>' +
               '<span>' + k(CMD) + ' + ' + k('Z') + '</span><span>назад, с ' + k('Shift') + ' вперёд</span>' +
-              '<span>' + k(CMD) + ' + щелчок</span><span>открыть ссылку или нажать кнопку</span>' +
+              '<span>' + k(CMD) + ' + щелчок</span><span>нажать кнопку или открыть ссылку в новой вкладке. Перейти по ссылке в этой вкладке можно через глаз</span>' +
               '<span>' + k('Delete') + '</span><span>убрать выбранный блок, ещё раз вернуть</span>' +
             '</div>' +
             '<p class="foot">Правки хранятся в этом браузере, сайт не меняется. «Скопировать правки» отдаёт их ИИ одним сообщением. ' +
@@ -1648,7 +1691,7 @@
       lbl: $('lbl'), toast: $('toast'), help: $('help'), modal: $('modal'), mtext: $('mtext'),
       box: $('box'), hdl: $('hdl'), hov: $('hov'), dim: $('dim'), guides: $('guides'), cols: $('cols'),
       undo: $('undo'), redo: $('redo'), gridBtn: $('gridBtn'), gm: $('gm'), cell: $('cell'), ph: $('ph'), phf: $('phf'),
-      pick: $('pick'),
+      pick: $('pick'), conf: $('conf'), confText: $('confText'), confSub: $('confSub'), confYes: $('confYes'), confNo: $('confNo'),
     };
     $('mclose').addEventListener('click', () => ui.modal.classList.remove('on'));
     ui.modal.addEventListener('keydown', e => { if (e.key === 'Escape') ui.modal.classList.remove('on'); });
@@ -1702,34 +1745,40 @@
     $('offBtn').addEventListener('click', () => setHidden(!HIDDEN));
     $('offLbl').addEventListener('click', () => setHidden(false));
     $('helpX').addEventListener('click', () => { ui.help.classList.remove('on'); ui.side.classList.remove('helpon'); });
-    $('noteX').addEventListener('click', () => {
-      ui.note.classList.remove('on');
-      if (ui.note.dataset.hint) { try { localStorage.setItem(HINT_KEY, '1'); } catch {} }
-    });
+    $('noteX').addEventListener('click', () => ui.note.classList.remove('on'));
     bindBarDrag();
     placeBar();
     typoNodes(root);
     new MutationObserver(() => typoNodes(ui.items)).observe(ui.items, { childList: true, subtree: true });
-    // Подтверждение поверх списка, с размытием: системные окна браузера часто не показываются
+    // Подтверждение поверх списка, с размытием: системные окна браузера часто не показываются.
+    // Сбрасываются правки одной папки или одного сайта: так и пишем, с именем
     $('reset').addEventListener('click', () => {
       const here = liveRecs(PAGE).length, all = total();
       if (!all) { toast('Сбрасывать нечего'); return; }
-      const onlyHere = here && here !== all;
-      ui.side.classList.remove('helpon');
-      ui.help.classList.remove('on');
-      $('confText').textContent = onlyHere ? 'Сбросить ' + here + ' ' + plural(here) + ' этой страницы?' : 'Точно сбросить все правки?';
-      $('confSub').textContent = onlyHere ? 'На других страницах правки останутся' : 'Их нельзя будет вернуть';
-      $('conf').dataset.here = onlyHere ? '1' : '';
-      $('conf').classList.add('on');
+      if (here && here !== all) {
+        ask({ text: 'Сбросить ' + here + ' ' + plural(here) + ' этой страницы?', sub: 'На других страницах правки останутся',
+          yes: 'Сбросить', no: 'Отмена', onYes: () => {
+            Object.keys(recs()).forEach(drop);
+            clearHist();
+            select(null);
+            toast('Правки этой страницы сброшены, на других остались');
+          } });
+        return;
+      }
+      const name = SITE.length > 48 ? SITE.slice(0, 46) + '…' : SITE;
+      ask({ text: 'Сбросить все правки ' + (CFG.opened ? (CFG.openedAs === 'file' ? 'файла' : 'папки') : 'сайта') + ' «' + name + '»?',
+        sub: (here ? '' : 'На этой странице правок нет, сбросятся правки других страниц. ') + 'Вернуть их будет нельзя',
+        yes: 'Сбросить', no: 'Отмена', onYes: () => { clearAll(); select(null); toast('Правки сброшены'); } });
     });
-    $('confNo').addEventListener('click', () => $('conf').classList.remove('on'));
+    $('confNo').addEventListener('click', () => {
+      const o = ui.confAct;
+      ui.conf.classList.remove('on');
+      if (o && o.onNo) o.onNo();
+    });
     $('confYes').addEventListener('click', () => {
-      const onlyHere = !!$('conf').dataset.here;
-      $('conf').classList.remove('on');
-      if (onlyHere) Object.keys(recs()).forEach(drop);
-      else clearAll();
-      select(null);
-      toast(onlyHere ? 'Правки этой страницы сброшены, на других остались' : 'Правки сброшены');
+      const o = ui.confAct;
+      ui.conf.classList.remove('on');
+      if (o && o.onYes) o.onYes();
     });
     ui.pages.addEventListener('change', () => {
       const p = ui.pages.value;
@@ -1761,7 +1810,22 @@
     ui.toast.textContent = typo(msg);
     ui.toast.classList.add('on');
     clearTimeout(toast.t);
-    toast.t = setTimeout(() => ui.toast.classList.remove('on'), 2200);
+    // Длинную подсказку держим дольше, чтобы её успели прочитать
+    toast.t = setTimeout(() => ui.toast.classList.remove('on'), Math.max(2200, msg.length * 45));
+  }
+
+  /* Вопрос поверх списка: { text, sub, yes, no, onYes, onNo } */
+  function ask(o) {
+    ui.side.classList.add('on');
+    ui.side.classList.remove('helpon');
+    ui.help.classList.remove('on');
+    render();
+    ui.confText.textContent = typo(o.text);
+    ui.confSub.textContent = typo(o.sub || '');
+    ui.confYes.textContent = o.yes;
+    ui.confNo.textContent = o.no;
+    ui.confAct = o;
+    ui.conf.classList.add('on');
   }
 
   function paintCount() { if (ui) ui.cnt.textContent = total(); }
@@ -1841,6 +1905,8 @@
       ta.dataset.addr = r.addr;
       ta.addEventListener('input', () => setNote(r.addr, ta.value));
       ta.addEventListener('blur', () => setTimeout(() => prune(r.addr), 150));
+      // Esc снимает курсор с замечания: Delete и стрелки снова действуют на выбранный блок
+      ta.addEventListener('keydown', e => { if (e.key === 'Escape') ta.blur(); });
       it.querySelector('.addr').addEventListener('click', () => focusBlock(r.addr));
       it.querySelector('.x').addEventListener('click', () => {
         const el = blocks.get(r.addr);
@@ -1946,23 +2012,47 @@
     return okToMove(el) ? el : null;
   }
 
-  /* Карточка: у блока свой фон, рамка или тень, и он не во весь экран. */
-  function boxy(el) {
+  /* У блока свой фон, рамка или тень */
+  function painted(el) {
     const cs = getComputedStyle(el);
     const bg = cs.backgroundColor;
     const fill = (bg && bg !== 'transparent' && !/rgba\([^)]*,\s*0\)$/.test(bg)) || cs.backgroundImage !== 'none';
     const border = ['Top', 'Right', 'Bottom', 'Left'].some(s =>
       parseFloat(cs['border' + s + 'Width']) > 0 && cs['border' + s + 'Style'] !== 'none');
-    if (!fill && !border && (!cs.boxShadow || cs.boxShadow === 'none')) return false;
-    const r = el.getBoundingClientRect();
-    return r.width < innerWidth * 0.6 && r.height < innerHeight * 0.8;
+    return fill || border || !!(cs.boxShadow && cs.boxShadow !== 'none');
   }
 
+  /* Контейнер раскладки, а не карточка: на большую часть окна или с несколькими крупными
+     блоками внутри (карточками, картинками, каждая хотя бы на пятую часть его площади) */
+  function layoutBox(el) {
+    const r = el.getBoundingClientRect();
+    if (r.width >= innerWidth * 0.6 || r.height >= innerHeight * 0.8) return true;
+    const area = r.width * r.height;
+    if (!area) return false;
+    let big = 0, seen = 0;
+    const walk = (p, depth) => {
+      for (const k of p.children) {
+        if (big >= 2 || ++seen > 200) return;   // мышь двигается часто: длинные списки не перебираем
+        const q = k.getBoundingClientRect();
+        if (q.width * q.height < area * 0.2) continue;
+        if (MEDIA.test(k.tagName) || painted(k)) big++;
+        else if (depth < 2) walk(k, depth + 1);
+      }
+    };
+    walk(el, 0);
+    return big >= 2;
+  }
+
+  /* Карточка: у блока свой фон, рамка или тень, и это не контейнер раскладки */
+  const boxy = el => painted(el) && !layoutBox(el);
+
   /* Что потянется, как в Figma: текст или фото внутри карточки тянут всю карточку.
-     Внутрь карточки заходит двойной щелчок. Shift берёт уровнем выше. */
+     Внутрь карточки заходит двойной щелчок. Shift берёт уровнем выше.
+     Пустое место большого контейнера раскладки ничего не берёт: это не объект, а место, где лежат блоки */
   function movable(t, shift) {
     let el = baseOf(t);
     if (!el) return null;
+    if (!shift && !MEDIA.test(el.tagName) && !isTextBlock(el) && layoutBox(el)) return null;
     let p = el.parentElement;
     for (let i = 0; i < 3 && p && p !== document.body; i++, p = p.parentElement) {
       if (boxy(p)) { el = p; break; }
@@ -2111,8 +2201,10 @@
     loop();
   }
 
-  // Заметка над панелью: висит, пока её не закроют крестиком
-  const HINT_KEY = 'pravki:hint';
+  // Заметка над панелью: висит, пока её не закроют крестиком. Первая подсказка показывается один раз
+  // на сайт или папку и уходит сама, как только человек взялся за страницу.
+  // pravki:hint это старая отметка «закрыли крестиком», её тоже уважаем
+  const HINT_KEY = 'pravki:hint', HINT_SITE = 'pravki:hint:' + KEY.slice(7);
   function note(msg, hint) {
     ui.noteText.textContent = typo(msg);
     if (hint) ui.note.dataset.hint = '1'; else delete ui.note.dataset.hint;
@@ -2129,14 +2221,37 @@
   const barPref = (() => { try { return JSON.parse(localStorage.getItem(BAR_KEY)) || {}; } catch { return {}; } })();
   function saveBar() { try { localStorage.setItem(BAR_KEY, JSON.stringify(barPref)); } catch {} }
 
+  /* Меню сайта, прибитое к низу экрана (fixed или sticky), например нижнее меню мобильного прототипа.
+     Сколько пикселей оно занимает снизу: панель встаёт над ним, а не поверх */
+  function lowBar() {
+    let top = innerHeight;
+    for (const f of [0.5, 0.3, 0.7]) {
+      const n = document.elementsFromPoint(innerWidth * f, innerHeight - 4).find(x => x !== ui.host);
+      for (let e = n; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+        const pos = getComputedStyle(e).position;
+        if (pos !== 'fixed' && pos !== 'sticky') continue;
+        const r = e.getBoundingClientRect();
+        if (r.bottom >= innerHeight - 24 && r.top > innerHeight * 0.55) top = Math.min(top, r.top);
+        break;
+      }
+    }
+    return Math.round(innerHeight - top);
+  }
+
   // Место панели помнится долями окна: после разворота окна она стоит там же относительно краёв
   function placeBar() {
     const b = ui.bar;
     delete barPref.x;
     delete barPref.y;
-    if (barPref.fx == null) { b.classList.remove('moved'); b.style.left = b.style.top = b.style.bottom = ''; }
-    else {
+    if (barPref.fx == null) {
+      b.classList.remove('moved');
+      b.style.left = b.style.top = '';
+      const lift = lowBar();
+      b.style.bottom = lift ? lift + 12 + 'px' : '';
+      ui.toast.style.bottom = lift ? lift + 68 + 'px' : '';
+    } else {
       b.classList.add('moved');
+      ui.toast.style.bottom = '';
       const r = b.getBoundingClientRect();
       const x = Math.max(8, Math.min(barPref.fx * innerWidth - r.width / 2, innerWidth - r.width - 8));
       const y = Math.max(8, Math.min(barPref.fy * innerHeight - r.height / 2, innerHeight - r.height - 8));
@@ -2180,6 +2295,12 @@
     ui.hand.addEventListener('pointercancel', end);
     ui.hand.addEventListener('dblclick', () => { delete barPref.fx; delete barPref.fy; placeBar(); saveBar(); paintGridMenu(); });
     window.addEventListener('resize', placeBar);
+    // Меню у низа экрана бывает прилипает только после прокрутки: проверяем и тогда, не чаще пяти раз в секунду
+    let st = 0;
+    window.addEventListener('scroll', () => {
+      if (barPref.fx != null || st) return;
+      st = setTimeout(() => { st = 0; placeBar(); }, 200);
+    }, { passive: true, capture: true });
   }
 
   function hideGrid() {
@@ -2478,8 +2599,12 @@
   /* ---------- назад и вперёд ---------- */
 
   const hist = { back: [], fwd: [] };
+  const HIST_KEEP = 100;      // столько шагов помнит хранилище, в памяти до 300
 
   function pushHist(a) {
+    // Блок шага помним адресом и путём: после перезагрузки по ним он находится снова
+    a.addr = a.el.dataset.pvAddr || '';
+    a.sel = cssPath(a.el);
     const last = hist.back[hist.back.length - 1];
     if (a.merge && last && last.merge && last.el === a.el && a.t - last.t < 800) {
       last.after = a.after;
@@ -2488,6 +2613,38 @@
     if (hist.back.length > 300) hist.back.shift();
     hist.fwd = [];
     paintHist();
+    saveHist();
+  }
+
+  /* «Назад» и «Вперёд» живут вместе с правками страницы и переживают перезагрузку */
+  const histOut = list => list.slice(-HIST_KEEP).map(a => ({ type: a.type, addr: a.addr, sel: a.sel, before: a.before, after: a.after, t: a.t }));
+  function saveHist() {
+    if (PREVIEW) return;
+    if (hist.back.length || hist.fwd.length) page().hist = { back: histOut(hist.back), fwd: histOut(hist.fwd) };
+    else delete page().hist;
+    save();
+  }
+  function clearHist() {
+    hist.back = []; hist.fwd = [];
+    paintHist();
+    saveHist();
+  }
+  // Шаги прошлого раза. Если файлы с тех пор поменялись (что-то внесено, блоки сместились, правка не нашлась), история не годится
+  function loadHist() {
+    const h = page().hist;
+    if (!h) return;
+    if (found.moved) { delete page().hist; save(); return; }
+    const back = (h.back || []).map(histEl).filter(Boolean), fwd = (h.fwd || []).map(histEl).filter(Boolean);
+    hist.back = back;
+    hist.fwd = fwd;
+    paintHist();
+  }
+  function histEl(a) {
+    let el = a.addr ? blocks.get(a.addr) : null;
+    if (!el && a.sel) { try { el = document.querySelector(a.sel); } catch {} }
+    if (!el || (el.dataset.pvAddr && a.addr && el.dataset.pvAddr !== a.addr)) return null;
+    if (a.type === 'text' && !el.dataset.pvCe) return null;
+    return Object.assign({}, a, { el });
   }
 
   function paintHist() {
@@ -2512,6 +2669,7 @@
     act(a, 'before');
     hist.fwd.push(a);
     paintHist();
+    saveHist();
   }
 
   function redo() {
@@ -2520,6 +2678,7 @@
     act(a, 'after');
     hist.back.push(a);
     paintHist();
+    saveHist();
   }
 
   /* ---------- ширина телефона ---------- */
@@ -2582,11 +2741,50 @@
   const editable = t => t && t.closest && t.closest('[data-pv-addr]:not([data-pv-kind])');
   const fromUI = ev => ui && ev.target === ui.host;
 
+  /* Набранное на конце ссылки Chrome и Safari ставят за ней, а человек и «Скачать с правками» ждут внутри.
+     Пока вставляем текст, ссылка на миг блочная: у блочной ссылки браузер оставляет текст внутри,
+     и его собственный шаг «назад» в правке текста не ломается */
+  function linkEnd(el) {
+    const s = getSelection();
+    if (!s.rangeCount) return null;
+    const r = s.getRangeAt(0);
+    const n = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+    const a = n && n.closest('a[href]');
+    if (!a || a === el || !el.contains(a) || !a.contains(r.endContainer)) return null;
+    const rest = document.createRange();
+    rest.setStart(r.endContainer, r.endOffset);
+    rest.setEnd(a, a.childNodes.length);
+    return rest.toString() ? null : a;
+  }
+  let typing = false;
+  function typeText(el, text) {
+    const a = linkEnd(el);
+    if (!a) { document.execCommand('insertText', false, text); return; }
+    // Только через атрибут: правка через a.style оставляет пустой style="" в разметке
+    const st = a.getAttribute('style');
+    a.setAttribute('style', (st ? st + ';' : '') + 'display:block!important');
+    typing = true;
+    try { document.execCommand('insertText', false, text); } finally {
+      typing = false;
+      if (st == null) a.removeAttribute('style'); else a.setAttribute('style', st);
+    }
+    touch(el);
+  }
+
   function bind() {
     document.addEventListener('input', ev => {
+      if (typing) return;
       const el = editable(ev.target);
       if (el) touch(el);
     });
+    document.addEventListener('beforeinput', ev => {
+      if (HIDDEN || (ev.inputType !== 'insertText' && ev.inputType !== 'insertReplacementText')) return;
+      const el = editable(ev.target);
+      const text = ev.data != null ? ev.data : ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
+      if (!el || !text || !linkEnd(el)) return;
+      ev.preventDefault();
+      typeText(el, text);
+    }, true);
 
     // Правка текста целиком, от входа до выхода, это один шаг назад.
     document.addEventListener('focusin', ev => {
@@ -2641,13 +2839,13 @@
       if (ev.key === 'Escape') { el.blur(); select(el); return; }
       if (ev.code === 'Space' && (ev.altKey || ((ev.metaKey || ev.ctrlKey) && ev.shiftKey))) {
         ev.preventDefault();
-        document.execCommand('insertText', false, NBSP);
+        typeText(el, NBSP);
         return;
       }
       // В кнопке пробел нажимает её, поэтому ставим его сами
       if (ev.code === 'Space' && !ev.altKey && !ev.metaKey && !ev.ctrlKey && el.closest('button')) {
         ev.preventDefault();
-        document.execCommand('insertText', false, ' ');
+        typeText(el, ' ');
         return;
       }
       if (ev.key === 'Enter') {
@@ -2680,6 +2878,12 @@
     // сайт событие получает. Внутри текста, который уже правится, всё как обычно.
     window.addEventListener('mousedown', ev => {
       if (HIDDEN || ev.button !== 0 || ev.altKey || fromUI(ev)) return;
+      // Курсор стоит в поле замечания списка: щелчок по странице его снимает, иначе Delete и стрелки уйдут в поле.
+      // Фокус браузер сам не переносит, его действие ниже гасим
+      const inUI = ui.root.activeElement;
+      if (inUI) inUI.blur();
+      // Первая подсказка уходит, как только человек взялся за страницу
+      if (ui.note.dataset.hint) ui.note.classList.remove('on');
       const ed = editingEl();
       if (ed && ed.contains(ev.target)) return;
       if (ed) ed.blur();
@@ -2779,7 +2983,7 @@
     const hintClick = () => {
       if (Date.now() - hintAt < 6000) return;
       hintAt = Date.now();
-      toast('Ссылки и кнопки в режиме правок не нажимаются. ' + CMD + ' + щелчок нажмёт');
+      toast('Ссылки и кнопки в режиме правок не нажимаются. ' + CMD + ' + щелчок нажмёт кнопку или откроет ссылку в новой вкладке');
     };
     // Кнопки сайта в режиме правок не нажимаются, как и ссылки: двойной щелчок по ним правит текст.
     // Cmd или Ctrl + щелчок нажимает по-настоящему. Пока правится текст, щелчок внутри него тоже ничего не нажимает
@@ -2826,6 +3030,7 @@
     if (CFG.reveal) reveal();
     index();
     restore();
+    loadHist();
     bind();
     render();
     paintHist();
@@ -2840,10 +3045,43 @@
     // Режим скрыли глазом в этой вкладке: на новой странице он тоже скрыт. Закладку нажали сами, значит показываем
     if (isOff() && !LATE) setHidden(true);
     else setOff(false);
-    let seen = false;
-    try { seen = localStorage.getItem(HINT_KEY) === '1'; } catch {}
-    if (applied) note('Уже внесено в файлы и убрано из списка: ' + applied);
-    else if (!HIDDEN && !seen) note('Тяните, чтобы двигать. Двойной щелчок правит текст, Alt + щелчок оставляет замечание, Delete убирает блок', true);
+    const tell = () => {
+      let seen = false;
+      try { seen = localStorage.getItem(HINT_KEY) === '1' || localStorage.getItem(HINT_SITE) === '1'; } catch {}
+      if (applied) {
+        // Внесённое проверяется только на открытой странице: про остальные говорим прямо, иначе кажется, что их не внесли
+        const rest = Object.keys(store.pages).some(p => p !== PAGE && liveRecs(p).length);
+        note((rest ? 'На этой странице уже внесено в файлы и убрано из списка: ' : 'Уже внесено в файлы и убрано из списка: ') + applied +
+          (rest ? '. Правки других страниц проверятся, когда вы их откроете' : ''));
+      } else if (!HIDDEN && !seen) {
+        note('Тяните, чтобы двигать. Двойной щелчок правит текст, Alt + щелчок оставляет замечание, Delete убирает блок. ' +
+          'Панель можно утащить за название', true);
+        try { localStorage.setItem(HINT_SITE, '1'); } catch {}
+      }
+    };
+    if (HIDDEN || !askForeign(tell)) tell();
+  }
+
+  /* Папку открыли на сайте пакета заново, а правки этой страницы от прошлого раза почти не нашлись и ничего из них
+     не внесено: может быть, это другая папка с таким же именем. Спрашиваем один раз на страницу за одно открытие.
+     Пока человек не ответил, заметку «уже внесено» не показываем: про чужую папку она неправда */
+  function askForeign(after) {
+    if (!CFG.opened || !CFG.openedAt) return false;
+    const o = store.opened && store.opened.at === CFG.openedAt ? store.opened : { at: CFG.openedAt, pages: [] };
+    if (o.keep || o.pages.includes(PAGE)) return false;
+    o.pages.push(PAGE);
+    saveTop('opened', o);
+    if (found.sure || !found.miss || found.miss * 2 < found.n) return false;
+    const file = CFG.openedAs === 'file';
+    ask({
+      text: 'Правки от прошлого раза ' + (found.exact ? 'почти не нашлись' : 'не нашлись') + ' на этой странице',
+      sub: 'Если это ' + (file ? 'другой файл' : 'другая папка') + ' с таким же именем, начните заново, старые правки сотрутся. ' +
+        'Если ' + (file ? 'тот же, а он поменялся' : 'та же, а файлы поменялись') + ', оставьте их',
+      yes: 'Начать заново', no: 'Оставить',
+      onYes: () => { clearAll(); select(null); ui.side.classList.remove('on'); toast('Старые правки стёрты, можно начинать'); },
+      onNo: () => { o.keep = true; saveTop('opened', o); after(); },
+    });
+    return true;
   }
 
   /* Во фрейме «Телефон»: только показать правки, без панели и без записи. */

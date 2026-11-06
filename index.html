@@ -131,30 +131,28 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
 </nav>
 
 <h1>Режим правок</h1>
-<p class="lead">Правьте HTML-страницу прямо в&nbsp;браузере на&nbsp;компьютере, а&nbsp;потом отдайте правки ИИ одним сообщением. Для презентаций и&nbsp;сайтов, без установки программ</p>
+<p class="lead">Правьте HTML-страницу прямо в&nbsp;браузере на&nbsp;компьютере, а&nbsp;потом скачайте готовый файл или отдайте правки ИИ. Для презентаций и&nbsp;сайтов, без установки программ</p>
 <a class="btn" href="%D0%9F%D1%80%D0%B8%D0%BC%D0%B5%D1%80.html">Попробовать на&nbsp;примере</a>
 
-<img class="shot" src="img/screenshot.png" alt="Страница в режиме правок: выбран блок, розовая линия привязки, панель режима внизу">
+<img class="shot" src="img/screenshot.png" alt="Страница в режиме правок: выбрано фото, внизу панель режима с кнопками «Скачать с правками» и «Скопировать правки»">
 <div class="three">
   <p>Тяните фото и&nbsp;блоки, края прилипают к&nbsp;соседям и&nbsp;к&nbsp;сетке</p>
   <p>Двойной щелчок правит текст, Alt + щелчок оставляет замечание</p>
-  <p>«Скопировать правки» отдаёт всё ИИ одним сообщением, а&nbsp;он вносит правки в&nbsp;файлы</p>
+  <p>«Скачать с&nbsp;правками» даёт готовый файл, «Скопировать правки» отдаёт всё ИИ одним сообщением</p>
 </div>
 
-<h2>Три способа вносить правки</h2>
+<h2>Три способа включить режим</h2>
 <div class="ways">
 
   <div>
     <h3>Открыть папку здесь</h3>
-    <p class="who">Если работаете с&nbsp;ИИ в&nbsp;чате: ChatGPT, GigaChat, Claude</p>
+    <p class="who">Если правите сами или с&nbsp;ИИ в&nbsp;чате: ChatGPT, GigaChat, Claude</p>
     <p>Выберите папку с&nbsp;презентацией или сайтом. Страница откроется в&nbsp;этой вкладке уже в&nbsp;режиме правок</p>
-    <p>Когда закончите, нажмите «Скопировать правки» и&nbsp;отправьте в&nbsp;чат инструкцию, правки и&nbsp;файлы страниц со&nbsp;стилями. ИИ пришлёт исправленные файлы</p>
     <div class="row">
       <button class="btn" data-open="dir">Открыть папку</button>
       <button class="link" data-open="file">или один файл</button>
     </div>
     <div id="picked" class="ym-hide-content" aria-live="polite"></div>
-    <p><button class="link" data-copy="instr">Скопировать инструкцию для&nbsp;ИИ</button></p>
     <p class="mute">Chrome спросит, загрузить&nbsp;ли файлы на&nbsp;сайт. Это его обычный вопрос: файлы остаются у&nbsp;вас в&nbsp;браузере и&nbsp;в&nbsp;интернет не&nbsp;уходят. Без вопроса можно просто перетащить папку на&nbsp;эту страницу</p>
   </div>
 
@@ -164,7 +162,7 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
     <p>Отправьте агенту эту фразу из&nbsp;папки с&nbsp;презентацией</p>
     <div class="phrase" id="phrase">Включи режим правок для этой папки. Возьми его с&nbsp;github.com/Tomb-Raider/rezhim-pravok и&nbsp;сделай всё по&nbsp;его «Инструкции для ИИ». Правки, которые я&nbsp;потом пришлю, вноси по&nbsp;ней&nbsp;же</div>
     <p><button class="btn ghost" data-copy="phrase">Скопировать фразу</button></p>
-    <p class="mute">Агент откроет страницу в&nbsp;браузере уже в&nbsp;режиме правок. Когда закончите, вставьте ему правки, и&nbsp;он сам внесёт их&nbsp;в&nbsp;файлы</p>
+    <p class="mute">Агент откроет страницу в&nbsp;браузере уже в&nbsp;режиме правок</p>
   </div>
 
   <div>
@@ -172,7 +170,25 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
     <p class="who">Если страница уже в&nbsp;интернете</p>
     <p>Перетащите кнопку на&nbsp;панель закладок, откройте сайт и&nbsp;нажмите закладку</p>
     <p><a class="bm" data-bm href="#">Режим правок</a></p>
-    <p class="mute">Панель закладок включается <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Mac и&nbsp;<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Windows. Некоторые большие сайты не&nbsp;пускают закладку</p>
+    <p class="mute">Панель закладок включается <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Mac и&nbsp;<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> на&nbsp;Windows. Если сайт не&nbsp;пускает закладку, она скажет об&nbsp;этом</p>
+  </div>
+</div>
+
+<h2>Два способа получить результат</h2>
+<div class="ways">
+
+  <div>
+    <h3>Скачать с&nbsp;правками</h3>
+    <p class="who">Без ИИ</p>
+    <p>Скачается та&nbsp;же страница, где уже стоят сдвиги, размеры и&nbsp;новый текст. Замените ею старый файл. Несколько страниц скачаются архивом</p>
+    <p class="mute">Замечания словами в&nbsp;файл не&nbsp;попадают, их&nbsp;отдайте ИИ</p>
+  </div>
+
+  <div>
+    <h3>Скопировать правки</h3>
+    <p class="who">Для ИИ</p>
+    <p>В&nbsp;чат отправьте инструкцию, правки и&nbsp;файлы страниц со&nbsp;стилями, ИИ пришлёт исправленные файлы. Агенту достаточно вставить правки, он внесёт их&nbsp;сам</p>
+    <p><button class="link" data-copy="instr">Скопировать инструкцию для&nbsp;ИИ</button></p>
   </div>
 </div>
 
@@ -190,7 +206,7 @@ h3 { margin: 0 0 4px; font-size: 20px; line-height: 1.3; font-weight: 600; }
 
 <script>
 // Закладку не открываем щелчком, её тянут на панель
-const BM = "javascript:(function(){if(window.__pravki)return;var s=document.createElement('script');s.src='https://tomb-raider.github.io/rezhim-pravok/pravki.js?v='+Date.now();s.setAttribute('data-auto','1');document.documentElement.appendChild(s);})()"
+const BM = "javascript:(function(){if(window.__pravki)return;var d=0,f=function(){if(d||window.__pravki)return;d=1;alert('Этот сайт не пускает режим правок. Если у\u00a0вас есть файлы сайта, откройте их на сайте пакета')};try{var s=document.createElement('script');s.src='https://tomb-raider.github.io/rezhim-pravok/pravki.js?v='+Date.now();s.setAttribute('data-auto','1');s.onerror=f;document.documentElement.appendChild(s)}catch(e){f()}setTimeout(f,3000)})()"
 for (const a of document.querySelectorAll('[data-bm]')) {
   a.href = BM
   a.title = 'Перетащите на панель закладок'

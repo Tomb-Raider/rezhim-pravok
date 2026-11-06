@@ -61,7 +61,7 @@ function missing(html, page, have) {
   return [...out]
 }
 
-async function openFiles(root, entries) {
+async function openFiles(root, entries, as) {
   if (!CAN) {
     say('<p class="warn">Так открыть можно только с&nbsp;сайта пакета: <a href="https://tomb-raider.github.io/rezhim-pravok/">tomb-raider.github.io/rezhim-pravok</a></p>')
     return
@@ -85,8 +85,11 @@ async function openFiles(root, entries) {
     root, name: site.name || root, base: decodeURIComponent(basePath), baseURL: basePath, opened: true,
     // Здесь рядом с каждой страницей её исходник без режима: из него «Скачать с правками» собирает файл
     srcCache: 'pravki-files',
-    // У двух папок с одним именем правки не смешаются: ключ хранилища ещё и по составу страниц
+    // Ключ хранилища: имя и состав страниц. Его не меняет ни правка, ни ИИ, поэтому внесённое уходит из списка.
+    // Если у другой папки с тем же именем правки от прошлого раза не находятся, режим спросит, начать ли заново
     key: root + '#' + hash(pages.join('|')),
+    // Когда и что открыли: «Скачать с правками» скажет, из какой версии собран файл
+    openedAt: Date.now(), openedAs: as || 'dir',
     pagesList: pages.map(p => ({ path: p, name: ((site.pages || {})[p] || {}).name || '' })),
   })
   // Режим берём свежим при каждом открытии папки, а не из кэша браузера
@@ -134,13 +137,13 @@ $('#dirIn').addEventListener('change', e => {
   const files = [...e.target.files]
   if (!files.length) return
   const root = files[0].webkitRelativePath.split('/')[0]
-  openFiles(root, files.map(f => ({ path: f.webkitRelativePath.split('/').slice(1).join('/'), file: f })))
+  openFiles(root, files.map(f => ({ path: f.webkitRelativePath.split('/').slice(1).join('/'), file: f })), 'dir')
   e.target.value = ''
 })
 $('#fileIn').addEventListener('change', e => {
   const files = [...e.target.files]
   if (!files.length) return
-  openFiles(files[0].name.replace(/\.html?$/i, ''), files.map(f => ({ path: f.name, file: f })))
+  openFiles(files[0].name.replace(/\.html?$/i, ''), files.map(f => ({ path: f.name, file: f })), 'file')
   e.target.value = ''
 })
 
@@ -159,7 +162,7 @@ addEventListener('drop', async e => {
   const dirs = items.filter(i => i.isDirectory)
   if (dirs.length === 1 && items.length === 1) {
     say('<p>Читаю папку…</p>')
-    openFiles(dirs[0].name, await walk(dirs[0], ''))
+    openFiles(dirs[0].name, await walk(dirs[0], ''), 'dir')
   } else {
     const files = []
     for (const it of items) {
@@ -167,7 +170,7 @@ addEventListener('drop', async e => {
       else files.push({ path: it.name, file: await new Promise((ok, no) => it.file(ok, no)) })
     }
     const first = files.map(f => f.path).filter(isHTML).sort(order)[0] || 'страница'
-    openFiles(first.replace(/\.html?$/i, '').split('/').pop(), files)
+    openFiles(first.replace(/\.html?$/i, '').split('/').pop(), files, 'file')
   }
 })
 async function walk(dir, prefix) {
