@@ -64,6 +64,8 @@
   if (window.top !== window && !PREVIEW) return;
   window.__pravki = { loading: true };
   const LATE = document.readyState === 'complete';
+  // Вышли из режима крестиком на панели: больше ничего не делаем и не пишем в хранилище
+  let EXITED = false;
 
   const CFG = Object.assign({ sources: {}, pages: {}, skip: [] }, window.PRAVKI_CONFIG || {});
   const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -114,8 +116,9 @@
      в двух вкладках на разных страницах, они не затирают правки друг друга.
      Просмотр на ширине телефона ничего не пишет. */
   function save() {
-    if (PREVIEW) return;
+    if (PREVIEW || EXITED) return;
     markInSrc();
+    anchorAll();
     try {
       const fresh = load();
       fresh.pages[PAGE] = page();
@@ -123,11 +126,11 @@
       localStorage.setItem(KEY, JSON.stringify(store));
     } catch {}
   }
-  function saveAll() { if (!PREVIEW) try { localStorage.setItem(KEY, JSON.stringify(store)); } catch {} }
+  function saveAll() { if (!PREVIEW && !EXITED) try { localStorage.setItem(KEY, JSON.stringify(store)); } catch {} }
   // Общее поле хранилища, не страницы: тоже поверх свежей копии
   function saveTop(k, v) {
     store[k] = v;
-    if (PREVIEW) return;
+    if (PREVIEW || EXITED) return;
     try {
       const fresh = load();
       fresh[k] = v;
@@ -344,6 +347,7 @@
       el.dataset.pvCe = '1';
       el.setAttribute('contenteditable', 'plaintext-only');
       if (!el.isContentEditable) el.setAttribute('contenteditable', 'true');
+      if (!el.hasAttribute('spellcheck')) el._pvSpell = 1;
       el.spellcheck = true;
       el._pvBefore = norm(rawText(el));
       el._pvBeforeHTML = el.innerHTML;
@@ -367,7 +371,7 @@
 
   // Сдвиг и размер ставим инлайн-стилем, а исходный инлайн-стиль помним,
   // чтобы откат и «Сбросить» вернули всё как было.
-  const MOVED = new Set();
+  const MOVED = new Set(), STYLED = new Set();
   const REPLACED = /^(IMG|SVG|VIDEO|CANVAS|PICTURE|IFRAME)$/i;
   const MEDIA = /^(IMG|SVG|VIDEO|CANVAS|PICTURE)$/i;
   const boxW = el => el.offsetWidth != null ? el.offsetWidth : el.clientWidth;
@@ -383,6 +387,9 @@
 
   function keepStyle(el) {
     if (el._pvStyle) return;
+    // Был ли у блока свой атрибут style: после выхода из режима пустой не оставляем
+    el._pvStyleAttr = el.getAttribute('style');
+    STYLED.add(el);
     const s = el.style, cs = getComputedStyle(el);
     el._pvStyle = { translate: s.translate, width: s.width, height: s.height, maxWidth: s.maxWidth,
       maxHeight: s.maxHeight, flex: s.flex, display: s.display };
@@ -449,8 +456,12 @@
     if (!hasMove(r)) { delete r.move; return false; }
     let done = false;
     const [x, y] = natPos(el);
-    if (m.dx && m.ox != null && Math.abs(x - (m.ox + m.dx)) < 2) { m.ox = x; m.dx = 0; done = true; }
-    if (m.dy && m.oy != null && Math.abs(y - (m.oy + m.dy)) < 2) { m.oy = y; m.dy = 0; done = true; }
+    // Сдвиг в файле записан translate (так пишет «Скачать с правками»): тогда он внесён, даже если блок
+    // уехал вместе с соседями, например убрали абзац выше. Место в родителе этого не покажет
+    const t = /^(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?/.exec(getComputedStyle(el).translate || '');
+    const tr = t ? [parseFloat(t[1]), parseFloat(t[2] || 0)] : [0, 0], t0 = m.t0 || [0, 0];
+    if (m.dx && ((m.ox != null && Math.abs(x - (m.ox + m.dx)) < 2) || Math.abs(tr[0] - (t0[0] + m.dx)) < 1)) { m.ox = x; m.dx = 0; done = true; }
+    if (m.dy && ((m.oy != null && Math.abs(y - (m.oy + m.dy)) < 2) || Math.abs(tr[1] - (t0[1] + m.dy)) < 1)) { m.oy = y; m.dy = 0; done = true; }
     if (m.w != null && Math.abs(m.w - m.w0) >= 2 && Math.abs(boxW(el) - m.w) < 2) { m.w0 = m.w; m.w = null; done = true; }
     if (m.h != null && Math.abs(m.h - m.h0) >= 2 && Math.abs(boxH(el) - m.h) < 2) { m.h0 = m.h; m.h = null; done = true; }
     if (!hasMove(r)) delete r.move; else applyMove(el, m);
@@ -477,6 +488,126 @@
     render();
   }
 
+  /* ---------- где были блоки записей ---------- */
+
+  /* Порядок текстовых блоков страницы и короткие отпечатки их текстов. Страница помнит этот порядок (seq),
+     каким он был в файле, когда записи сделаны или в последний раз нашлись, а запись помнит своё место в нём (sq).
+     После перезагрузки старый порядок сверяется с новым, как две версии одного текста: видно, какой блок убрали,
+     какой поправили, и одинаковые блоки не путаются между собой. Записи без этих полей (сделаны до 06.11.2026)
+     ищутся по-старому, по тексту и пути */
+  let SEQ = { els: [], h: [], ok: false };
+  // Перенос строки в исходнике внутри абзаца на странице выглядит пробелом: при сверке это одно и то же
+  const loose = s => (s || '').replace(/\n/g, ' ');
+  const sameT = (a, b) => a === b || loose(a) === loose(b);
+  function hashT(s) {
+    s = loose(s);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(36);
+  }
+  /* Место нетекстового блока среди текстовых: сколько их стоит до него и сколько внутри него */
+  function gapOf(el) {
+    let g = 0, c = 0;
+    for (const b of SEQ.els) {
+      if (b === el) continue;
+      const p = el.compareDocumentPosition(b);
+      if (p & Node.DOCUMENT_POSITION_CONTAINED_BY) c++;
+      else if ((p & Node.DOCUMENT_POSITION_PRECEDING) && !(p & Node.DOCUMENT_POSITION_CONTAINS)) g++;
+    }
+    return [g, c];
+  }
+  /* Текстовой записи её номер в порядке блоков. Замечанию место между текстовыми блоками и, если рядом
+     стоят такие же блоки (две одинаковые картинки подряд), который он из них по счёту (tw: номер, сколько всего) */
+  function setAnchor(r, el) {
+    if (r.kind !== 'note') {
+      const k = SEQ.els.indexOf(el);
+      if (k >= 0) r.sq = k; else delete r.sq;
+      return;
+    }
+    const [g, c] = gapOf(el), d = describe(el);
+    const tw = [...document.body.getElementsByTagName(el.tagName)]
+      .filter(x => x === el || (!x.dataset.pvCe && describe(x) === d && gapOf(x)[0] === g));
+    r.sq = g; r.sqn = c; r.tw = [tw.indexOf(el), tw.length];
+  }
+  function dropAnchor(r) { delete r.sq; delete r.sqn; delete r.tw; }
+  // Перед записью в хранилище: новым записям место, странице порядок блоков, пока у неё есть записи
+  function anchorAll() {
+    if (!SEQ.ok) return;
+    const pg = page(), list = Object.values(pg.recs);
+    for (const r of list) {
+      if (r.sq !== undefined || r.lost) continue;
+      const el = blocks.get(r.addr);
+      if (el && el.isConnected) setAnchor(r, el);
+    }
+    if (list.length) pg.seq = SEQ.h; else delete pg.seq;
+  }
+
+  /* Сверка старого порядка текстовых блоков (A) с новым (B). Блок с записью совпадает и со своим «было»,
+     и со «стало», убранный блок (и блоки внутри убранного) может пропасть даром, всё остальное, что пропало
+     или появилось, стоит единицу. Среди самых дешёвых сверок запись получает блок, только если он у неё
+     во всех один и тот же, иначе честно «не нашёлся». Отдаёт новое место каждого старого блока (map)
+     и решение по каждой записи: номер блока, 'gone' (блока больше нет) или 'unsure' */
+  function align(A, B, tk, nk) {
+    const n = A.length, m = B.length;
+    const recAt = new Array(n).fill(null), free = new Uint8Array(n);
+    for (const r of tk) { recAt[r.sq] = [hashT(r.before), hashT(r.after)]; if (r.del) free[r.sq] = 1; }
+    for (const r of nk) if (r.del) for (let i = r.sq; i < r.sq + r.sqn; i++) free[i] = 1;
+    const eq = (i, j) => recAt[i] ? (B[j] === recAt[i][0] || B[j] === recAt[i][1]) : A[i] === B[j];
+    const skip = i => free[i] ? 0 : 1;
+    // Одинаковые начало и конец без записей сверять незачем
+    let p = 0, s = 0;
+    while (p < n && p < m && !recAt[p] && !free[p] && A[p] === B[p]) p++;
+    while (s < n - p && s < m - p && !recAt[n - 1 - s] && !free[n - 1 - s] && A[n - 1 - s] === B[m - 1 - s]) s++;
+    const a = n - p - s, b = m - p - s, W = b + 1;
+    // Около 2400 блоков на 2400: дольше и памятнее не сверяем, такие записи ищутся по-старому
+    if ((a + 1) * W > 6e6) return null;
+    const F = new Uint16Array((a + 1) * W), G = new Uint16Array((a + 1) * W);
+    for (let i = 0; i <= a; i++) for (let j = 0; j <= b; j++) {
+      if (!i && !j) continue;
+      let v = 1e9;
+      if (i) v = F[(i - 1) * W + j] + skip(p + i - 1);
+      if (j) v = Math.min(v, F[i * W + j - 1] + 1);
+      if (i && j && eq(p + i - 1, p + j - 1)) v = Math.min(v, F[(i - 1) * W + j - 1]);
+      F[i * W + j] = v;
+    }
+    for (let i = a; i >= 0; i--) for (let j = b; j >= 0; j--) {
+      if (i === a && j === b) continue;
+      let v = 1e9;
+      if (i < a) v = G[(i + 1) * W + j] + skip(p + i);
+      if (j < b) v = Math.min(v, G[i * W + j + 1] + 1);
+      if (i < a && j < b && eq(p + i, p + j)) v = Math.min(v, G[(i + 1) * W + j + 1]);
+      G[i * W + j] = v;
+    }
+    const T = G[0];
+    const map = new Int32Array(n).fill(-1);
+    for (let i = 0; i < p; i++) map[i] = i;
+    for (let k = 0; k < s; k++) map[n - 1 - k] = m - 1 - k;
+    for (let i = 0, j = 0; i < a || j < b;) {
+      const g = G[i * W + j];
+      if (i < a && j < b && eq(p + i, p + j) && g === G[(i + 1) * W + j + 1]) { map[p + i] = p + j; i++; j++; }
+      else if (i < a && g === G[(i + 1) * W + j] + skip(p + i)) i++;
+      else j++;
+    }
+    const res = new Map();
+    for (const r of tk) {
+      const i = r.sq - p;
+      let hit = -1, many = false, gone = false;
+      for (let j = 0; j <= b; j++) {
+        if (j < b && eq(r.sq, p + j) && F[i * W + j] + G[(i + 1) * W + j + 1] === T) { if (hit >= 0) many = true; hit = p + j; }
+        if (F[i * W + j] + skip(r.sq) + G[(i + 1) * W + j] === T) gone = true;
+      }
+      res.set(r, many || (hit >= 0 && gone) ? 'unsure' : hit >= 0 ? hit : 'gone');
+    }
+    // Нетекстовый блок стоял между старыми блоками sq - 1 и sq + sqn: теперь его место между их новыми местами
+    const range = r => {
+      let i = r.sq - 1, k = r.sq + r.sqn;
+      while (i >= 0 && map[i] < 0) i--;
+      while (k < n && map[k] < 0) k++;
+      return [i >= 0 ? map[i] + 1 : 0, k < n ? map[k] : m];
+    };
+    return { res, range };
+  }
+
   /* Возвращаем правки после перезагрузки. Правка, которую уже внесли в файлы
      (на странице теперь текст «стало» или блок уже на новом месте), убирается сама. */
   let applied = 0;
@@ -486,8 +617,12 @@
   function restore() {
     const rs = recs();
     const list = Object.values(rs);
+    const prev = Array.isArray(page().seq) ? page().seq : null, n = prev ? prev.length : 0;
+    const els = [...blocks.values()].filter(b => b._pvBefore !== undefined && b.dataset.pvKind !== 'note');
+    SEQ = { els, h: els.map(b => hashT(b._pvBefore)), ok: true };
     // Блок, который уже достался одной записи, другой не отдаём
     const taken = new Set();
+    const free = c => !taken.has(c) && !c.dataset.pvCe;
     // Из нескольких одинаковых блоков берём ближайший к старому месту, при равенстве тот, что выше:
     // убранный сосед сдвигает блоки вверх по странице
     const nearest = (cands, all, near) => {
@@ -498,95 +633,143 @@
       }
       return best;
     };
-
-    /* Замечания и убранные блоки без текста. Их адрес это путь по номерам детей (sel), и он съезжает,
-       когда соседа перед блоком убрали («Скачать с правками» или ИИ). Сначала записи, чей блок стоит
-       на своём месте, потом поиск съехавших по описанию среди свободных блоков, потом старый путь как есть */
-    const notes = list.filter(r => r.kind === 'note');
-    const nAt = new Map();
     const bySel = r => { try { return (r.sel && document.querySelector(r.sel)) || null; } catch { return null; } };
     const want = r => (r.del && r.fp ? r.fp : r.before);
-    for (const r of notes) {
-      const el = bySel(r);
-      if (el && !taken.has(el) && describe(el) === want(r) && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) {
-        nAt.set(r, el); taken.add(el);
+    const tagOf = r => (((r.sel || '').match(/([a-z][\w-]*)(?::nth-child\(\d+\))?\s*$/i) || [])[1] || '').toLowerCase();
+    const notes = list.filter(r => r.kind === 'note'), texts = list.filter(r => r.kind !== 'note');
+
+    // Записи, чьё место в старом порядке известно и сходится с их текстом, сверяем по порядку блоков
+    let tk = prev ? texts.filter(r => Number.isInteger(r.sq) && r.sq >= 0 && r.sq < n && prev[r.sq] === hashT(r.before)) : [];
+    let nk = prev ? notes.filter(r => Number.isInteger(r.sq) && Number.isInteger(r.sqn) && r.sq >= 0 && r.sqn >= 0 &&
+      r.sq + r.sqn <= n && Array.isArray(r.tw) && r.tw[1] > 0 && tagOf(r)) : [];
+    const al = tk.length || nk.length ? align(prev, SEQ.h, tk, nk) : null;
+    if (!al) { tk = []; nk = []; }
+
+    /* Замечания и убранные блоки без текста */
+    const nAt = new Map(), nGone = new Set(), nLost = new Set();
+    const put = (r, el) => { if (el && !taken.has(el)) { nAt.set(r, el); taken.add(el); } else nLost.add(r); };
+    if (al) {
+      // Записи к одинаковым блокам в одном месте решаем вместе: сколько таких блоков было, сколько стало, сколько из них убрано
+      const groups = new Map();
+      for (const r of nk) {
+        const [lo, hi] = al.range(r), w = want(r), tag = tagOf(r), key = [w, tag, lo, hi].join('\u0001');
+        if (!groups.has(key)) groups.set(key, { w, tag, lo, hi, recs: [] });
+        groups.get(key).recs.push(r);
+      }
+      const inRange = (g, el) => { const [x, c] = gapOf(el); return x >= g.lo && x + c <= g.hi; };
+      for (const g of groups.values()) {
+        const cands = [...document.body.getElementsByTagName(g.tag)].filter(c => free(c) && describe(c) === g.w && inRange(g, c));
+        const N = g.recs[0].tw[1], dels = g.recs.filter(r => r.del);
+        const sameN = g.recs.every(r => r.tw[1] === N);
+        if (sameN && cands.length === N) for (const r of g.recs) put(r, cands[r.tw[0]]);
+        else if (sameN && dels.length && cands.length === N - dels.length) {
+          for (const r of g.recs) {
+            if (r.del) nGone.add(r);
+            else put(r, cands[r.tw[0] - dels.filter(d => d.tw[0] < r.tw[0]).length]);
+          }
+        } else if (!cands.length) {
+          // Таких блоков на месте нет. Блок поменялся (например, ИИ поправил в нём текст): замечание остаётся на старом пути
+          for (const r of g.recs) {
+            const el = r.del ? null : bySel(r);
+            if (el && free(el) && el.localName === g.tag && inRange(g, el)) put(r, el); else nLost.add(r);
+          }
+        } else g.recs.forEach(r => nLost.add(r));
       }
     }
-    for (const r of notes) {
-      if (nAt.has(r)) continue;
-      const tag = ((r.sel || '').match(/([a-z][\w-]*)(?::nth-child\(\d+\))?\s*$/i) || [])[1];
-      if (!tag) continue;
-      const all = [...document.body.getElementsByTagName(tag)];
-      const cands = all.filter(c => !taken.has(c) && (!c.dataset.pvAddr || c.dataset.pvAddr === r.addr) && describe(c) === want(r));
-      if (!cands.length) continue;
-      const ref = bySel(r);
-      const el = nearest(cands, all, ref ? all.indexOf(ref) : all.length);
-      nAt.set(r, el); taken.add(el);
-      r.sel = cssPath(el); r.where = shortPath(el); found.moved = true;
-    }
-    for (const r of notes) {
-      // Убранный блок не нашёлся ни на месте, ни по описанию: его убрали из файлов, запись выполнена
-      if (nAt.has(r) || r.del) continue;
-      // Блок поменялся (например, ИИ поправил в нём текст): замечание остаётся на старом пути
+    /* Записи без места в порядке блоков: на своём пути, потом по описанию, если такой блок один.
+       Убранный блок, которого нет ни там, ни там, убрали из файлов. Если таких блоков несколько, какой из них
+       убран, не понять: запись остаётся с пометкой «не нашёлся», а не помечает убранным соседа */
+    const nfb = notes.filter(r => !nk.includes(r));
+    for (const r of nfb) {
       const el = bySel(r);
-      if (el && !taken.has(el) && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) { nAt.set(r, el); taken.add(el); }
+      if (el && free(el) && describe(el) === want(r)) { nAt.set(r, el); taken.add(el); }
+    }
+    for (const r of nfb) {
+      if (nAt.has(r)) continue;
+      const tag = tagOf(r);
+      const cands = tag ? [...document.body.getElementsByTagName(tag)].filter(c => free(c) && describe(c) === want(r)) : [];
+      if (r.del) { (cands.length ? nLost : nGone).add(r); continue; }
+      if (cands.length === 1) { nAt.set(r, cands[0]); taken.add(cands[0]); continue; }
+      if (cands.length) { nLost.add(r); continue; }
+      const el = bySel(r);
+      if (el && free(el)) { nAt.set(r, el); taken.add(el); }
     }
     for (const r of notes) {
       const el = nAt.get(r) || null;
-      if (!el && r.del) { delete rs[r.addr]; applied++; found.moved = true; continue; }
+      if (!el && nGone.has(r)) { delete rs[r.addr]; applied++; found.moved = true; continue; }
       found.n++;
       if (el) {
         if (describe(el) === want(r)) found.exact++; else { found.miss++; found.moved = true; }
+        const sel = cssPath(el);
+        if (sel !== r.sel) { r.sel = sel; r.where = shortPath(el); found.moved = true; }
+        setAnchor(r, el);
         markNote(el, r.addr);
         if (r.del) applyDel(el, true);
         if (r.note && r.note.trim()) el.dataset.pvNote = '1';
         delete r.lost;
         if (r.move && settleMove(el, r)) { applied++; found.sure = true; }
         if (!live(r)) { unmark(el); delete rs[r.addr]; } else r.pos = posOf(el);
-      } else { r.lost = true; found.miss++; found.moved = true; }
+      } else { r.lost = true; dropAnchor(r); found.miss++; found.moved = true; }
     }
 
-    /* Текстовые правки. Адрес «секция, тег, номер по порядку» съезжает, когда блок выше добавили или убрали.
-       Сначала записи, у которых на своём адресе свой текст («было» или уже внесённое «стало»),
-       потом съехавшие по тексту среди свободных блоков, ближе к старому месту. От порядка записей
-       ничего не зависит: раньше правка, сделанная до удаления соседа, могла не найтись */
-    const texts = list.filter(r => r.kind !== 'note');
-    const all = [...blocks.values()].filter(b => b._pvBefore !== undefined && b.dataset.pvKind !== 'note');
-    const tAt = new Map();
-    const mine = (b, r) => b._pvBefore === r.before || b._pvBefore === r.after;
-    for (const r of texts) {
+    /* Текстовые правки. Адрес «секция, тег, номер по порядку» съезжает, когда блок выше добавили или убрали */
+    const tAt = new Map(), tGone = new Set();
+    // Блок внутри убранного блока, который уже убрали из файлов
+    const inGone = r => nk.some(c => c.del && nGone.has(c) && c.sq <= r.sq && r.sq < c.sq + c.sqn);
+    for (const r of tk) {
+      const o = al.res.get(r);
+      if (typeof o === 'number') { const el = SEQ.els[o]; if (el && !taken.has(el)) { tAt.set(r, el); taken.add(el); } }
+      else if (o === 'gone' && (r.del || inGone(r))) tGone.add(r);
+    }
+    /* Записи без места в порядке блоков: на своём адресе со своим текстом («было» или уже внесённое «стало»),
+       потом ближайший свободный блок с одним из этих текстов */
+    const tfb = texts.filter(r => !tk.includes(r));
+    const all = SEQ.els;
+    const mine = (b, r) => sameT(b._pvBefore, r.before) || sameT(b._pvBefore, r.after);
+    for (const r of tfb) {
       const el = blocks.get(r.addr);
       if (el && el._pvBefore !== undefined && !taken.has(el) && mine(el, r)) { tAt.set(r, el); taken.add(el); }
     }
-    for (const r of texts) {
+    for (const r of tfb) {
       if (tAt.has(r)) continue;
       const old = blocks.get(r.addr);
       const near = typeof r.pos === 'number' ? r.pos : (old && all.includes(old) ? all.indexOf(old) : all.length);
-      const pick = t => nearest(all.filter(b => b._pvBefore === t && !taken.has(b)), all, near);
-      const hit = pick(r.before) || (r.after !== r.before ? pick(r.after) : null);
+      const hit = nearest(all.filter(b => !taken.has(b) && mine(b, r)), all, near);
       if (hit) { tAt.set(r, hit); taken.add(hit); found.moved = true; }
+      else if (r.del) tGone.add(r);
     }
     // Новые адреса: сначала у нашедшихся, потом ненайденные на старом адресе, если там никого нет
     for (const r of texts) delete rs[r.addr];
-    for (const r of texts) if (tAt.has(r)) { r.addr = tAt.get(r).dataset.pvAddr; rs[r.addr] = r; }
+    for (const r of texts) if (tAt.has(r)) {
+      const a = tAt.get(r).dataset.pvAddr;
+      if (a !== r.addr) found.moved = true;
+      r.addr = a;
+      rs[a] = r;
+    }
     for (const r of texts) if (!tAt.has(r)) {
-      while (rs[r.addr] || (blocks.has(r.addr) && !r.del)) r.addr += '+';
+      while (rs[r.addr] || (blocks.has(r.addr) && !tGone.has(r))) r.addr += '+';
       rs[r.addr] = r;
     }
     for (const r of texts) {
       const el = tAt.get(r) || null;
-      if (!el && r.del) { delete rs[r.addr]; applied++; found.moved = true; continue; }
+      if (!el && tGone.has(r)) { delete rs[r.addr]; applied++; found.moved = true; continue; }
       found.n++;
-      if (!el) { r.lost = true; found.miss++; found.moved = true; continue; }
+      if (!el) { r.lost = true; dropAnchor(r); found.miss++; found.moved = true; continue; }
       found.exact++;
       delete r.lost;
+      r.sq = SEQ.els.indexOf(el);
       if (r.del) applyDel(el, true);
-      if (r.after !== r.before && el._pvBefore === r.after) {
+      const t = el._pvBefore;
+      if (r.after !== r.before && t !== r.before && sameT(t, r.after)) {
         // Текст уже в файлах: правка и замечание к ней сделаны, сдвиг проверяем отдельно.
-        r.before = r.after;
+        r.before = r.after = t;
         r.note = '';
         applied++;
         found.sure = true;
+      } else if (t !== r.before) {
+        // В файле тот же текст, только по-другому разбит на строки
+        if (r.after === r.before) r.after = t;
+        r.before = t;
       }
       if (r.after !== r.before) {
         el.innerHTML = r.afterHTML;
@@ -605,6 +788,7 @@
   /* ---------- правки ---------- */
 
   function touch(el) {
+    el._pvTouched = 1;
     const addr = el.dataset.pvAddr;
     const now = norm(rawText(el));
     const rs = recs();
@@ -1312,7 +1496,9 @@
           delete rs[r.addr];
         } else {
           if (!texts.has(r.after)) continue;
-          // Как на открытой странице: текст и замечание к нему сделаны, сдвиг остаётся до открытия страницы
+          // Как на открытой странице: текст и замечание к нему сделаны, сдвиг остаётся до открытия страницы.
+          // В порядке блоков страницы у этого блока теперь новый текст
+          if (Array.isArray(pg.seq) && Number.isInteger(r.sq) && pg.seq[r.sq] === hashT(r.before)) pg.seq[r.sq] = hashT(r.after);
           r.before = r.after;
           r.note = '';
           if (!live(r)) delete rs[r.addr];
@@ -1324,7 +1510,7 @@
       delete pg.hist;
       changed.push([p, pg]);
     }
-    if (!changed.length || PREVIEW) return;
+    if (!changed.length || PREVIEW || EXITED) return;
     try {
       const fresh = load();
       for (const [p, pg] of changed) fresh.pages[p] = pg;
@@ -1507,6 +1693,7 @@
 
   /* Всё, что прозрачно или спрятано до прокрутки, делаем видимым. Трансформ
      не трогаем: им бывает повёрнута подпись, сдвиг на десяток пикселей не мешает. */
+  const SHOWN = [];
   function reveal() {
     let n = 0;
     for (const el of document.body.querySelectorAll('*')) {
@@ -1514,6 +1701,11 @@
       const cs = getComputedStyle(el);
       if (cs.display === 'none') continue;
       if (cs.opacity === '0' || cs.visibility === 'hidden') {
+        // Как было, чтобы выход из режима вернул спрятанное
+        if (!el._pvShown) {
+          el._pvShown = ['opacity', 'visibility'].map(k => [k, el.style.getPropertyValue(k), el.style.getPropertyPriority(k)]);
+          SHOWN.push(el);
+        }
         el.style.setProperty('opacity', '1', 'important');
         el.style.setProperty('visibility', 'visible', 'important');
         n++;
@@ -1585,7 +1777,10 @@
     .bar button.offlbl{display:none;padding:0 8px 0 2px;color:#C9CED4}
     .bar button.offlbl:hover{background:transparent;color:#fff}
     .bar.off button.offlbl{display:inline-flex}
-    .bar.off > :not(#offBtn):not(#undo):not(#redo):not(.offlbl){display:none}
+    .bar.off > :not(#offBtn):not(#undo):not(#redo):not(.offlbl):not(#exit){display:none}
+    /* Выход: первое нажатие спрашивает прямо на кнопке, красным, как «Сбросить» в списке */
+    .bar button.exit.sure{width:auto;padding:0 14px;background:#E5484D;font-weight:600}
+    .bar button.exit.sure:hover{background:#D63F44}
 
     .side{position:fixed;top:0;right:0;bottom:0;width:min(400px,100vw);z-index:2147483645;display:none;
           flex-direction:column;background:#FAFBFC;border-left:1px solid #E4E7EA;
@@ -1722,6 +1917,13 @@
   `;
 
   let ui = null;
+  /* Выход из режима: обработчики страницы снимаются все разом. Если браузер не умеет снимать по сигналу,
+     они просто ничего не делают после выхода */
+  const AC = new AbortController();
+  function on(t, type, fn, opt) {
+    const o = Object.assign({}, typeof opt === 'boolean' ? { capture: opt } : opt || {}, { signal: AC.signal });
+    t.addEventListener(type, ev => { if (!EXITED) fn(ev); }, o);
+  }
   let selected = null;        // адрес записи, подсвеченной в списке
   let pagesList = [];
 
@@ -1777,6 +1979,7 @@
             'Замечания словами в него не попадут, их отдайте ИИ">' + ICON('down') + '<span class="lb">Скачать с правками</span></button>' +
           '<input type="file" id="pick" accept=".html,.htm,text/html" multiple hidden>' +
           '<button class="go full" id="copy">Скопировать правки</button>' +
+          '<button class="ic exit" id="exit" title="Выйти из режима правок" aria-label="Выйти из режима правок">' + ICON('x') + '</button>' +
           '<div class="note" id="note"><span id="noteText"></span>' +
             '<button class="nx" id="noteX" title="Закрыть" aria-label="Закрыть">' + ICON('x') + '</button></div>' +
         '</div>' +
@@ -1856,6 +2059,29 @@
     });
 
     $('copy').addEventListener('click', copy);
+    // Крестик выходит из режима. Если на этой странице есть правки, сначала спрашивает прямо на кнопке:
+    // второе нажатие выходит, щелчок в другом месте, Esc или 5 секунд без нажатия отменяют
+    ui.exit = $('exit');
+    ui.exit.addEventListener('click', () => {
+      const ex = ui.exit;
+      if (ex.classList.contains('sure') || !liveRecs(PAGE).length) { exitMode(); return; }
+      const others = Object.keys(store.pages).some(p => p !== PAGE && liveRecs(p).length);
+      ex.classList.add('sure');
+      ex.textContent = 'Точно выйти? Правки пропадут';
+      ex.title = 'Нажмите ещё раз, чтобы выйти. Правки этой страницы сотрутся' + (others ? ', на других страницах останутся' : '');
+      clearTimeout(ex._t);
+      ex._t = setTimeout(disarmExit, 5000);
+      placeBar();
+    });
+    on(window, 'pointerdown', ev => {
+      if (ui.exit.classList.contains('sure') && !ev.composedPath().includes(ui.exit)) disarmExit();
+    }, true);
+    on(window, 'keydown', ev => {
+      if (ev.key !== 'Escape' || !ui.exit.classList.contains('sure')) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      disarmExit();
+    }, true);
     $('save').addEventListener('click', saveClick);
     $('file').addEventListener('click', download);
     $('list').addEventListener('click', () => { ui.side.classList.toggle('on'); render(); });
@@ -1933,6 +2159,74 @@
       if (p && p !== PAGE) location.href = pageURL(p);
     });
     bindResize();
+  }
+
+  function disarmExit() {
+    const ex = ui && ui.exit;
+    if (!ex || !ex.classList.contains('sure')) return;
+    clearTimeout(ex._t);
+    ex.classList.remove('sure');
+    ex.innerHTML = ICON('x');
+    ex.title = 'Выйти из режима правок';
+    placeBar();
+  }
+
+  /* Выход из режима: страница становится такой, какой была до режима, без перезагрузки. Правки и шаги назад
+     этой страницы стираются, ?pravki уходит из адреса, и закладка или ?pravki потом включают режим заново,
+     с чистого листа. У агента в папке режим в страницу вставляет сам сервер, после перезагрузки он появится снова.
+     Остановленные анимации (freeze в настройках) вернутся только после перезагрузки */
+  function exitMode() {
+    const ed = editingEl();
+    if (ed) ed.blur();
+    if (ui.ph.classList.contains('on')) closePhone();
+    clearTimeout(ui.exit._t);
+    try {
+      const fresh = load();
+      delete fresh.pages[PAGE];
+      if (Object.keys(fresh.pages).length) localStorage.setItem(KEY, JSON.stringify(fresh));
+      else localStorage.removeItem(KEY);
+    } catch {}
+    setOff(false);
+    EXITED = true;
+    AC.abort();
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0; sel = null; hov = null; drag = null; gridOn = false;
+    // Текст, сдвиги, убранные блоки и отметки режима как были
+    for (const el of document.querySelectorAll('[data-pv-ce]')) {
+      if (el._pvTouched && el._pvBeforeHTML !== undefined && el.innerHTML !== el._pvBeforeHTML) el.innerHTML = el._pvBeforeHTML;
+      if (el._pvSpell) el.removeAttribute('spellcheck');
+      delete el._pvTouched; delete el._pvSpell;
+    }
+    unindex();
+    for (const el of STYLED) if (el._pvStyleAttr === null && !el.getAttribute('style')) el.removeAttribute('style');
+    STYLED.clear();
+    const marks = ['pvAddr', 'pvKind', 'pvChanged', 'pvNote', 'pvCe', 'pvHover', 'pvDel', 'pvMoved', 'pvFlash', 'pvSel'];
+    for (const el of document.querySelectorAll(marks.map(k => '[data-' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase()) + ']').join(','))) {
+      for (const k of marks) delete el.dataset[k];
+    }
+    delete document.documentElement.dataset.pvOff;
+    delete document.documentElement.dataset.pvDragging;
+    for (const el of SHOWN.splice(0)) {
+      for (const [k, v, pr] of el._pvShown) { if (v) el.style.setProperty(k, v, pr); else el.style.removeProperty(k); }
+      delete el._pvShown;
+    }
+    blocks = new Map();
+    try { getSelection().removeAllRanges(); } catch {}
+    ui.host.remove();
+    const st = document.getElementById('pravki-style');
+    if (st) st.remove();
+    // Без ?pravki в адресе перезагрузка режим не включит
+    try {
+      const u = new URL(location.href);
+      const cut = s => s.split('&').filter(t => !/^pravki(=|$)/.test(t));
+      const q = u.search.slice(1), h = u.hash.slice(1), q2 = cut(q), h2 = cut(h);
+      if (q2.length !== q.split('&').length || h2.length !== h.split('&').length) {
+        u.search = q2.join('&');
+        u.hash = h2.join('&');
+        history.replaceState(history.state, '', u.href);
+      }
+    } catch {}
+    delete window.__pravki;
   }
 
   // Адрес другой страницы сайта. У страниц, открытых файлом, в записи только имя файла из той же папки.
@@ -2232,7 +2526,7 @@
     loop();
   }
 
-  function loop() { if (!raf) raf = requestAnimationFrame(track); }
+  function loop() { if (!raf && !EXITED) raf = requestAnimationFrame(track); }
 
   // Рамки рисуем каждый кадр, пока есть выбранное: страница может прокручиваться и анимироваться.
   function track() {
@@ -2445,10 +2739,10 @@
     ui.hand.addEventListener('pointerup', end);
     ui.hand.addEventListener('pointercancel', end);
     ui.hand.addEventListener('dblclick', () => { delete barPref.fx; delete barPref.fy; placeBar(); saveBar(); paintGridMenu(); });
-    window.addEventListener('resize', placeBar);
+    on(window, 'resize', placeBar);
     // Меню у низа экрана бывает прилипает только после прокрутки: проверяем и тогда, не чаще пяти раз в секунду
     let st = 0;
-    window.addEventListener('scroll', () => {
+    on(window, 'scroll', () => {
       if (barPref.fx != null || st) return;
       st = setTimeout(() => { st = 0; placeBar(); }, 200);
     }, { passive: true, capture: true });
@@ -2923,12 +3217,12 @@
   }
 
   function bind() {
-    document.addEventListener('input', ev => {
+    on(document, 'input', ev => {
       if (typing) return;
       const el = editable(ev.target);
       if (el) touch(el);
     });
-    document.addEventListener('beforeinput', ev => {
+    on(document, 'beforeinput', ev => {
       if (HIDDEN || (ev.inputType !== 'insertText' && ev.inputType !== 'insertReplacementText')) return;
       const el = editable(ev.target);
       const text = ev.data != null ? ev.data : ev.dataTransfer ? ev.dataTransfer.getData('text/plain') : '';
@@ -2938,11 +3232,11 @@
     }, true);
 
     // Правка текста целиком, от входа до выхода, это один шаг назад.
-    document.addEventListener('focusin', ev => {
+    on(document, 'focusin', ev => {
       const el = editable(ev.target);
       if (el) el._pvEditHTML = el.innerHTML;
     });
-    document.addEventListener('focusout', ev => {
+    on(document, 'focusout', ev => {
       const el = editable(ev.target);
       if (!el) return;
       if (el._pvEditHTML != null && el._pvEditHTML !== el.innerHTML) {
@@ -2953,7 +3247,7 @@
 
     // Клавиши, пока правится текст, перехватываем раньше сайта: иначе
     // его горячие клавиши (стрелки, пробел) сработают посреди слова.
-    window.addEventListener('keydown', ev => {
+    on(window, 'keydown', ev => {
       if (HIDDEN) {
         const t = ev.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
         if (!fromUI(ev) && !typing && (ev.metaKey || ev.ctrlKey) && !ev.altKey && (ev.code === 'KeyZ' || ev.code === 'KeyY')) {
@@ -3004,15 +3298,15 @@
         if (!document.execCommand('insertLineBreak')) document.execCommand('insertHTML', false, '<br>');
       }
     }, true);
-    window.addEventListener('keyup', ev => {
+    on(window, 'keyup', ev => {
       if (HIDDEN) return;
       if (ev.key === 'Alt' || ev.key === 'Shift') { lastShift = ev.shiftKey; updateHover(ev.altKey); }
       if (editable(ev.target)) ev.stopPropagation();
     }, true);
-    window.addEventListener('keypress', ev => { if (!HIDDEN && editable(ev.target)) ev.stopPropagation(); }, true);
-    window.addEventListener('blur', () => { setHover(null); showLabel(null); });
+    on(window, 'keypress', ev => { if (!HIDDEN && editable(ev.target)) ev.stopPropagation(); }, true);
+    on(window, 'blur', () => { setHover(null); showLabel(null); });
 
-    document.addEventListener('mousemove', ev => {
+    on(document, 'mousemove', ev => {
       if (HIDDEN) return;
       const next = !ev.altKey && !drag && !editingEl() ? grabbed(ev.target, ev.shiftKey) : null;
       const h = next && !isTextBlock(next) ? next : null;
@@ -3022,12 +3316,12 @@
       lastShift = ev.shiftKey;
       updateHover(ev.altKey);
     }, { passive: true });
-    window.addEventListener('scroll', () => showLabel(null), { passive: true, capture: true });
+    on(window, 'scroll', () => showLabel(null), { passive: true, capture: true });
 
     // Щелчок выбирает, а не ставит каретку: каретку даёт двойной щелчок.
     // Поэтому у mousedown гасим действие браузера (фокус и выделение), но
     // сайт событие получает. Внутри текста, который уже правится, всё как обычно.
-    window.addEventListener('mousedown', ev => {
+    on(window, 'mousedown', ev => {
       if (HIDDEN || ev.button !== 0 || ev.altKey || fromUI(ev)) return;
       // Курсор стоит в поле замечания списка: щелчок по странице его снимает, иначе Delete и стрелки уйдут в поле.
       // Фокус браузер сам не переносит, его действие ниже гасим
@@ -3042,7 +3336,7 @@
       ev.preventDefault();
     }, true);
 
-    window.addEventListener('pointerdown', ev => {
+    on(window, 'pointerdown', ev => {
       if (!fromUI(ev)) ui.gm.classList.remove('on');
       if (HIDDEN || ev.button !== 0 || ev.altKey || ev.pointerType === 'touch' || fromUI(ev)) return;
       const ed = editingEl();
@@ -3057,7 +3351,7 @@
       }
       drag = { el, sx: ev.clientX, sy: ev.clientY, id: ev.pointerId, on: false };
     }, true);
-    window.addEventListener('pointermove', ev => {
+    on(window, 'pointermove', ev => {
       if (emptyTry && ev.pointerId === emptyTry.id && Math.hypot(ev.clientX - emptyTry.sx, ev.clientY - emptyTry.sy) >= 4) {
         emptyTry = null;
         hintBig();
@@ -3070,7 +3364,7 @@
       ev.preventDefault();
       moveDrag(drag, ev);
     }, true);
-    window.addEventListener('pointerup', ev => {
+    on(window, 'pointerup', ev => {
       emptyTry = null;
       if (!drag || ev.pointerId !== drag.id) return;
       const d = drag;
@@ -3082,20 +3376,20 @@
         setTimeout(() => { suppressClick = false; }, 400);
       } else select(d.el);
     }, true);
-    window.addEventListener('pointercancel', () => {
+    on(window, 'pointercancel', () => {
       if (!drag) return;
       const d = drag;
       drag = null;
       if (d.on) endDrag(d, true);
     }, true);
-    window.addEventListener('click', ev => {
+    on(window, 'click', ev => {
       if (!suppressClick) return;
       suppressClick = false;
       ev.preventDefault();
       ev.stopPropagation();
     }, true);
     // Двойной щелчок: по тексту правка, по остальному заход внутрь карточки.
-    window.addEventListener('dblclick', ev => {
+    on(window, 'dblclick', ev => {
       if (HIDDEN || ev.altKey || fromUI(ev)) return;
       const el = editable(ev.target);
       if (el && el === editingEl()) return;
@@ -3105,10 +3399,10 @@
       if (b) select(b);
     }, true);
     // Картинки и ссылки браузер умеет таскать сам, в режиме правок это мешает.
-    window.addEventListener('dragstart', ev => { if (!HIDDEN && !editingEl()) ev.preventDefault(); }, true);
+    on(window, 'dragstart', ev => { if (!HIDDEN && !editingEl()) ev.preventDefault(); }, true);
 
     // Alt + щелчок: замечание к тому, по чему щёлкнули.
-    document.addEventListener('click', ev => {
+    on(document, 'click', ev => {
       if (HIDDEN || !ev.altKey) return;
       const el = pick(ev.target, ev.shiftKey);
       if (!el) return;
@@ -3129,7 +3423,7 @@
 
     // Ссылки на другие страницы в режиме правок не открываются: по ним правят
     // текст. Якоря внутри страницы и Cmd/Ctrl + щелчок работают.
-    document.addEventListener('click', ev => {
+    on(document, 'click', ev => {
       if (HIDDEN || ev.altKey || ev.metaKey || ev.ctrlKey) return;
       // Кнопка формы в режиме правок форму не отправляет
       const fb = ev.target.closest && ev.target.closest('button,input[type=submit]');
@@ -3155,7 +3449,7 @@
     };
     // Кнопки сайта в режиме правок не нажимаются, как и ссылки: двойной щелчок по ним правит текст.
     // Cmd или Ctrl + щелчок нажимает по-настоящему. Пока правится текст, щелчок внутри него тоже ничего не нажимает
-    window.addEventListener('click', ev => {
+    on(window, 'click', ev => {
       if (HIDDEN || fromUI(ev) || ev.altKey) return;
       const ed = editingEl();
       if (ed && ed.contains(ev.target)) { ev.preventDefault(); ev.stopPropagation(); return; }
@@ -3165,7 +3459,7 @@
     }, true);
 
     // Сайт открыт в другой вкладке на другой странице: подтягиваем её правки.
-    window.addEventListener('storage', ev => {
+    on(window, 'storage', ev => {
       if (ev.key !== KEY) return;
       const mine = page();
       store = load();
