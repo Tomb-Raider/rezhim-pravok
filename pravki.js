@@ -101,11 +101,21 @@
   };
   const recs = () => page().recs;
 
+  /* Тексты блоков исходного файла открытой страницы (из хранилища «Открыть папку»), текст → сколько раз.
+     Запись помнит inSrc: стоял ли её текст «было» в самом файле, а не дописан скриптом сайта.
+     Только такую правку можно потом проверить по файлу, не открывая страницу (settleOthers) */
+  let pageSrc = null;
+  function markInSrc() {
+    if (!pageSrc) return;
+    for (const r of Object.values(recs())) if (r.kind !== 'note') r.inSrc = pageSrc.has(r.before) ? 1 : 0;
+  }
+
   /* Сохраняем только свою страницу поверх свежей копии: если сайт открыт
      в двух вкладках на разных страницах, они не затирают правки друг друга.
      Просмотр на ширине телефона ничего не пишет. */
   function save() {
     if (PREVIEW) return;
+    markInSrc();
     try {
       const fresh = load();
       fresh.pages[PAGE] = page();
@@ -659,9 +669,23 @@
     return out;
   }
 
+  /* Строка «папка». Открытое на сайте знает только имя папки или файла, путь на диске знает человек.
+     Пишем, что открыли (папку или файлы) и на каком сайте */
+  function placeLine() {
+    if (!CFG.opened) return 'папка: ' + ROOT;
+    const site = location.host + (CFG.baseURL || location.pathname).replace(/\/f\/[^/]+\/.*$/, '').replace(/\/$/, '')
+      .split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } }).join('/');
+    if (CFG.openedAs !== 'file') return 'папка: ' + ROOT + ' (открыта на сайте ' + site + ', полный путь знает человек)';
+    const names = (CFG.pagesList || []).map(p => p.path);
+    if (!names.length) names.push(PAGE);
+    const many = names.length > 1;
+    return (many ? 'файлы: ' : 'файл: ') + names.slice(0, 6).join(', ') + (names.length > 6 ? ' и ещё ' + (names.length - 6) : '') +
+      ' (' + (many ? 'открыты' : 'открыт') + ' на сайте ' + site + ', полный путь знает человек)';
+  }
+
   function build() {
     const out = ['ПРАВКИ САЙТА · ' + SITE + ' · ' + stamp() + ' · записей: ' + total()];
-    if (ROOT) out.push('папка: ' + ROOT + (CFG.opened ? ' (открыта на сайте пакета, полный путь знает человек)' : ''));
+    if (ROOT) out.push(placeLine());
     else {
       const dir = location.origin + location.pathname.replace(/[^/]*$/, '');
       let readable = dir;
@@ -1186,6 +1210,74 @@
   const writable = r => (r.kind !== 'note' && r.after !== r.before) || hasMove(r) || !!r.del;
   const hasNote = r => !!(r.note && r.note.trim());
 
+  /* Исходник страницы из хранилища «Открыть папку» и тексты его блоков тем же обходом, что у режима */
+  async function cachedSrc(p) {
+    if (!CFG.srcCache || !window.caches) return null;
+    try {
+      const url = new URL(p === PAGE ? location.href : pageURL(p), location.href);
+      const hit = await (await caches.open(CFG.srcCache)).match(url.origin + canon(url.pathname) + '?pravki-src');
+      return hit ? await hit.text() : null;
+    } catch { return null; }
+  }
+  function srcTexts(src) {
+    const D = new DOMParser().parseFromString(src, 'text/html'), out = new Map();
+    eachBlock(D.body, el => { const t = norm(rawText(el)); out.set(t, (out.get(t) || 0) + 1); });
+    return out;
+  }
+  async function readPageSrc() {
+    const src = await cachedSrc(PAGE);
+    if (src == null) return;
+    pageSrc = srcTexts(src);
+    save();
+  }
+
+  /* Правки других страниц, которые уже стоят в их файлах, уходят из списка сразу после «Открыть папку»,
+     а не когда страницу откроют. По исходнику без отрисовки видно только текст: новый текст и убранный
+     текстовый блок. И только у записей, чей текст «было» стоял в самом файле (inSrc), а не дописан скриптом.
+     Внесено, если старого текста в файле больше нет, а новый есть (у убранного блока нет ни того, ни другого).
+     Сдвиги, размеры и блоки без текста проверятся, когда страницу откроют */
+  let appliedElsewhere = 0;
+  async function settleOthers() {
+    if (!CFG.srcCache) return;
+    const changed = [];
+    const want = r => r.kind !== 'note' && r.inSrc && !r.lost && (r.del || r.after !== r.before);
+    for (const p of Object.keys(store.pages)) {
+      if (p === PAGE || !liveRecs(p).some(want)) continue;
+      const src = await cachedSrc(p);
+      // Пока ждали файл, save() мог взять свежую копию хранилища: записи берём из неё, уже после ожидания
+      const pg = store.pages[p];
+      if (src == null || !pg) continue;
+      const texts = srcTexts(src), rs = pg.recs;
+      let n = 0;
+      for (const r of Object.values(rs).filter(r => live(r) && want(r))) {
+        if (texts.has(r.before)) continue;
+        if (r.del) {
+          if (r.after !== r.before && texts.has(r.after)) continue;
+          delete rs[r.addr];
+        } else {
+          if (!texts.has(r.after)) continue;
+          // Как на открытой странице: текст и замечание к нему сделаны, сдвиг остаётся до открытия страницы
+          r.before = r.after;
+          r.note = '';
+          if (!live(r)) delete rs[r.addr];
+        }
+        n++;
+      }
+      if (!n) continue;
+      appliedElsewhere += n;
+      delete pg.hist;
+      changed.push([p, pg]);
+    }
+    if (!changed.length || PREVIEW) return;
+    try {
+      const fresh = load();
+      for (const [p, pg] of changed) fresh.pages[p] = pg;
+      fresh.pages[PAGE] = page();
+      store = fresh;
+      localStorage.setItem(KEY, JSON.stringify(store));
+    } catch {}
+  }
+
   /* Все страницы с правками → файлы с правками. Его же отдаёт __pravki.files() */
   async function buildFiles(picked) {
     const out = { files: [], done: 0, notes: 0, failed: 0, unread: [] };
@@ -1655,7 +1747,7 @@
           '<div class="help" id="help">' +
             '<div class="hh"><b>Клавиши</b><button class="x" id="helpX" title="Закрыть" aria-label="Закрыть">✕</button></div>' +
             '<div class="keys">' +
-              '<span>Тянуть мышью</span><span>двигать фото и блоки, края прилипают к соседям. Сдвинутый блок соседей не двигает, как в Figma</span>' +
+              '<span>Тянуть мышью</span><span>двигать фото и блоки, края прилипают к соседям. Сдвинутый блок ложится поверх соседей, они остаются на местах</span>' +
               '<span>' + k(CMD) + ' + тянуть</span><span>без привязки</span>' +
               '<span>' + k('Shift') + ' + тянуть</span><span>взять блок уровнем выше</span>' +
               '<span>Стрелки</span><span>сдвиг на 1 px, с ' + k('Shift') + ' на 10</span>' +
@@ -2063,6 +2155,9 @@
 
   // Что потянется из этой точки: выбранное тянется целиком, за что его ни возьми.
   const grabbed = (t, shift) => sel && !shift && sel.contains(t) ? sel : movable(t, shift);
+  // Под курсором пустое место большого контейнера раскладки: то, что movable() без Shift не берёт
+  const bigUnder = t => { const b = baseOf(t); return !!b && !MEDIA.test(b.tagName) && !isTextBlock(b) && layoutBox(b); };
+  let emptyTry = null;
 
   const editingEl = () => {
     const a = document.activeElement;
@@ -2897,10 +2992,20 @@
       const ed = editingEl();
       if (ed && ed.contains(ev.target)) return;
       const el = grabbed(ev.target, ev.shiftKey);
-      if (!el) { select(null); return; }
+      emptyTry = null;
+      if (!el) {
+        select(null);
+        // Пустое место большого блока: если человек потянет, скажем, как взять блок целиком
+        if (!ev.shiftKey && bigUnder(ev.target)) emptyTry = { sx: ev.clientX, sy: ev.clientY, id: ev.pointerId };
+        return;
+      }
       drag = { el, sx: ev.clientX, sy: ev.clientY, id: ev.pointerId, on: false };
     }, true);
     window.addEventListener('pointermove', ev => {
+      if (emptyTry && ev.pointerId === emptyTry.id && Math.hypot(ev.clientX - emptyTry.sx, ev.clientY - emptyTry.sy) >= 4) {
+        emptyTry = null;
+        hintBig();
+      }
       if (!drag || ev.pointerId !== drag.id) return;
       if (!drag.on) {
         if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) < 4) return;
@@ -2910,6 +3015,7 @@
       moveDrag(drag, ev);
     }, true);
     window.addEventListener('pointerup', ev => {
+      emptyTry = null;
       if (!drag || ev.pointerId !== drag.id) return;
       const d = drag;
       drag = null;
@@ -2979,6 +3085,12 @@
       ev.preventDefault();
       if (!editingEl()) hintClick();
     });
+    let bigAt = 0;
+    const hintBig = () => {
+      if (Date.now() - bigAt < 6000) return;
+      bigAt = Date.now();
+      toast('Это большой блок. Чтобы сдвинуть его целиком, тяните с Shift то, что в нём лежит');
+    };
     let hintAt = 0;
     const hintClick = () => {
       if (Date.now() - hintAt < 6000) return;
@@ -3048,18 +3160,22 @@
     const tell = () => {
       let seen = false;
       try { seen = localStorage.getItem(HINT_KEY) === '1' || localStorage.getItem(HINT_SITE) === '1'; } catch {}
-      if (applied) {
-        // Внесённое проверяется только на открытой странице: про остальные говорим прямо, иначе кажется, что их не внесли
-        const rest = Object.keys(store.pages).some(p => p !== PAGE && liveRecs(p).length);
-        note((rest ? 'На этой странице уже внесено в файлы и убрано из списка: ' : 'Уже внесено в файлы и убрано из списка: ') + applied +
-          (rest ? '. Правки других страниц проверятся, когда вы их откроете' : ''));
+      const done = applied + appliedElsewhere;
+      if (done) {
+        // Сдвиги и то, что по файлу не проверить, проверятся на своей странице: про них говорим прямо, иначе кажется, что их не внесли
+        const rest = Object.keys(store.pages).some(p => p !== PAGE && liveRecs(p).some(writable));
+        note('Уже внесено в файлы и убрано из списка: ' + done +
+          (rest ? '. Остальные правки других страниц проверятся, когда вы их откроете' : ''));
       } else if (!HIDDEN && !seen) {
         note('Тяните, чтобы двигать. Двойной щелчок правит текст, Alt + щелчок оставляет замечание, Delete убирает блок. ' +
           'Панель можно утащить за название', true);
         try { localStorage.setItem(HINT_SITE, '1'); } catch {}
       }
     };
-    if (HIDDEN || !askForeign(tell)) tell();
+    // Сначала проверяем по файлам правки других страниц, потом говорим, что внесено. Чужую папку (askForeign) не проверяем
+    const settle = () => settleOthers().catch(() => {}).then(() => { render(); tell(); });
+    readPageSrc();
+    if (HIDDEN || !askForeign(settle)) settle();
   }
 
   /* Папку открыли на сайте пакета заново, а правки этой страницы от прошлого раза почти не нашлись и ничего из них

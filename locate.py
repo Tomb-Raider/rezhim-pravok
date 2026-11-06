@@ -86,7 +86,7 @@ def parse(pack):
     for line in pack.splitlines():
         s = line.strip()
         if s.startswith('папка:'):
-            root = s.split(':', 1)[1].split(' (открыта на сайте пакета')[0].strip()
+            root = re.split(r' \(открыт[аы]? на сайте', s.split(':', 1)[1])[0].strip()
         elif s.startswith('═══'):
             page = s.strip('═ ').split('  ·  ')[0].strip()
             page_src = None
