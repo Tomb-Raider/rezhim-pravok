@@ -101,7 +101,7 @@
   };
   const recs = () => page().recs;
 
-  /* Тексты блоков исходного файла открытой страницы (из хранилища «Открыть папку»), текст → сколько раз.
+  /* Тексты блоков исходного файла открытой страницы (из хранилища «Открыть папку» или от сервера агента), текст → сколько раз.
      Запись помнит inSrc: стоял ли её текст «было» в самом файле, а не дописан скриптом сайта.
      Только такую правку можно потом проверить по файлу, не открывая страницу (settleOthers) */
   let pageSrc = null;
@@ -485,47 +485,96 @@
   const found = { n: 0, exact: 0, miss: 0, sure: false, moved: false };
   function restore() {
     const rs = recs();
-    for (const r of Object.values(rs)) {
-      if (r.kind === 'note') {
-        let el = null;
-        try { el = r.sel && document.querySelector(r.sel); } catch {}
-        // Блок убрали из файлов: на его месте теперь другой, запись выполнена
-        if (el && r.del && r.fp && describe(el) !== r.fp) el = null;
-        // Соседа перед блоком убрали («Скачать с правками» или ИИ), и номер по порядку сменился: ищем блок по описанию
-        if (!r.del && (!el || (el.dataset.pvAddr && el.dataset.pvAddr !== r.addr) || describe(el) !== r.before)) {
-          const tag = ((r.sel || '').match(/([a-z][\w-]*)(?::nth-child\(\d+\))?\s*$/i) || [])[1];
-          const same = tag ? [...document.body.getElementsByTagName(tag)]
-            .filter(c => (!c.dataset.pvAddr || c.dataset.pvAddr === r.addr) && describe(c) === r.before) : [];
-          if (same.length === 1) { el = same[0]; r.sel = cssPath(el); r.where = shortPath(el); found.moved = true; }
-        }
-        if (!el && r.del) { delete rs[r.addr]; applied++; found.moved = true; continue; }
-        found.n++;
-        if (el && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) {
-          if (describe(el) === (r.del && r.fp ? r.fp : r.before)) found.exact++; else { found.miss++; found.moved = true; }
-          markNote(el, r.addr);
-          if (r.del) applyDel(el, true);
-          if (r.note && r.note.trim()) el.dataset.pvNote = '1';
-          delete r.lost;
-          if (r.move && settleMove(el, r)) { applied++; found.sure = true; }
-          if (!live(r)) { unmark(el); delete rs[r.addr]; } else r.pos = posOf(el);
-        } else { r.lost = true; found.miss++; found.moved = true; }
-        continue;
+    const list = Object.values(rs);
+    // Блок, который уже достался одной записи, другой не отдаём
+    const taken = new Set();
+    // Из нескольких одинаковых блоков берём ближайший к старому месту, при равенстве тот, что выше:
+    // убранный сосед сдвигает блоки вверх по странице
+    const nearest = (cands, all, near) => {
+      let best = null, d = Infinity;
+      for (const c of cands) {
+        const i = all.indexOf(c), k = Math.abs(i - near) + (i > near ? 0.5 : 0);
+        if (k < d) { d = k; best = c; }
       }
-      let el = blocks.get(r.addr);
-      if (!el || (el._pvBefore !== r.before && el._pvBefore !== r.after)) {
-        // Адрес съехал (на странице добавился блок): ищем по исходному тексту, потом по новому.
-        const free = b => !rs[b.dataset.pvAddr];
-        const all = [...blocks.values()];
-        const hit = all.find(b => b._pvBefore === r.before && free(b)) ||
-          (r.after !== r.before && all.find(b => b._pvBefore === r.after && free(b)));
-        if (hit) {
-          delete rs[r.addr];
-          r.addr = hit.dataset.pvAddr;
-          rs[r.addr] = r;
-          el = hit;
-          found.moved = true;
-        } else el = null;
+      return best;
+    };
+
+    /* Замечания и убранные блоки без текста. Их адрес это путь по номерам детей (sel), и он съезжает,
+       когда соседа перед блоком убрали («Скачать с правками» или ИИ). Сначала записи, чей блок стоит
+       на своём месте, потом поиск съехавших по описанию среди свободных блоков, потом старый путь как есть */
+    const notes = list.filter(r => r.kind === 'note');
+    const nAt = new Map();
+    const bySel = r => { try { return (r.sel && document.querySelector(r.sel)) || null; } catch { return null; } };
+    const want = r => (r.del && r.fp ? r.fp : r.before);
+    for (const r of notes) {
+      const el = bySel(r);
+      if (el && !taken.has(el) && describe(el) === want(r) && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) {
+        nAt.set(r, el); taken.add(el);
       }
+    }
+    for (const r of notes) {
+      if (nAt.has(r)) continue;
+      const tag = ((r.sel || '').match(/([a-z][\w-]*)(?::nth-child\(\d+\))?\s*$/i) || [])[1];
+      if (!tag) continue;
+      const all = [...document.body.getElementsByTagName(tag)];
+      const cands = all.filter(c => !taken.has(c) && (!c.dataset.pvAddr || c.dataset.pvAddr === r.addr) && describe(c) === want(r));
+      if (!cands.length) continue;
+      const ref = bySel(r);
+      const el = nearest(cands, all, ref ? all.indexOf(ref) : all.length);
+      nAt.set(r, el); taken.add(el);
+      r.sel = cssPath(el); r.where = shortPath(el); found.moved = true;
+    }
+    for (const r of notes) {
+      // Убранный блок не нашёлся ни на месте, ни по описанию: его убрали из файлов, запись выполнена
+      if (nAt.has(r) || r.del) continue;
+      // Блок поменялся (например, ИИ поправил в нём текст): замечание остаётся на старом пути
+      const el = bySel(r);
+      if (el && !taken.has(el) && (!el.dataset.pvAddr || el.dataset.pvAddr === r.addr)) { nAt.set(r, el); taken.add(el); }
+    }
+    for (const r of notes) {
+      const el = nAt.get(r) || null;
+      if (!el && r.del) { delete rs[r.addr]; applied++; found.moved = true; continue; }
+      found.n++;
+      if (el) {
+        if (describe(el) === want(r)) found.exact++; else { found.miss++; found.moved = true; }
+        markNote(el, r.addr);
+        if (r.del) applyDel(el, true);
+        if (r.note && r.note.trim()) el.dataset.pvNote = '1';
+        delete r.lost;
+        if (r.move && settleMove(el, r)) { applied++; found.sure = true; }
+        if (!live(r)) { unmark(el); delete rs[r.addr]; } else r.pos = posOf(el);
+      } else { r.lost = true; found.miss++; found.moved = true; }
+    }
+
+    /* Текстовые правки. Адрес «секция, тег, номер по порядку» съезжает, когда блок выше добавили или убрали.
+       Сначала записи, у которых на своём адресе свой текст («было» или уже внесённое «стало»),
+       потом съехавшие по тексту среди свободных блоков, ближе к старому месту. От порядка записей
+       ничего не зависит: раньше правка, сделанная до удаления соседа, могла не найтись */
+    const texts = list.filter(r => r.kind !== 'note');
+    const all = [...blocks.values()].filter(b => b._pvBefore !== undefined && b.dataset.pvKind !== 'note');
+    const tAt = new Map();
+    const mine = (b, r) => b._pvBefore === r.before || b._pvBefore === r.after;
+    for (const r of texts) {
+      const el = blocks.get(r.addr);
+      if (el && el._pvBefore !== undefined && !taken.has(el) && mine(el, r)) { tAt.set(r, el); taken.add(el); }
+    }
+    for (const r of texts) {
+      if (tAt.has(r)) continue;
+      const old = blocks.get(r.addr);
+      const near = typeof r.pos === 'number' ? r.pos : (old && all.includes(old) ? all.indexOf(old) : all.length);
+      const pick = t => nearest(all.filter(b => b._pvBefore === t && !taken.has(b)), all, near);
+      const hit = pick(r.before) || (r.after !== r.before ? pick(r.after) : null);
+      if (hit) { tAt.set(r, hit); taken.add(hit); found.moved = true; }
+    }
+    // Новые адреса: сначала у нашедшихся, потом ненайденные на старом адресе, если там никого нет
+    for (const r of texts) delete rs[r.addr];
+    for (const r of texts) if (tAt.has(r)) { r.addr = tAt.get(r).dataset.pvAddr; rs[r.addr] = r; }
+    for (const r of texts) if (!tAt.has(r)) {
+      while (rs[r.addr] || (blocks.has(r.addr) && !r.del)) r.addr += '+';
+      rs[r.addr] = r;
+    }
+    for (const r of texts) {
+      const el = tAt.get(r) || null;
       if (!el && r.del) { delete rs[r.addr]; applied++; found.moved = true; continue; }
       found.n++;
       if (!el) { r.lost = true; found.miss++; found.moved = true; continue; }
@@ -1210,13 +1259,20 @@
   const writable = r => (r.kind !== 'note' && r.after !== r.before) || hasMove(r) || !!r.del;
   const hasNote = r => !!(r.note && r.note.trim());
 
-  /* Исходник страницы из хранилища «Открыть папку» и тексты его блоков тем же обходом, что у режима */
+  /* Исходник страницы из хранилища «Открыть папку» или от сервера агента в папке (адрес страницы с ?pravki-src,
+     файл как есть) и тексты его блоков тем же обходом, что у режима */
   async function cachedSrc(p) {
-    if (!CFG.srcCache || !window.caches) return null;
     try {
       const url = new URL(p === PAGE ? location.href : pageURL(p), location.href);
-      const hit = await (await caches.open(CFG.srcCache)).match(url.origin + canon(url.pathname) + '?pravki-src');
-      return hit ? await hit.text() : null;
+      if (CFG.srcCache && window.caches) {
+        const hit = await (await caches.open(CFG.srcCache)).match(url.origin + canon(url.pathname) + '?pravki-src');
+        return hit ? await hit.text() : null;
+      }
+      if (!CFG.server) return null;
+      url.hash = '';
+      url.search = '?pravki-src';
+      const res = await fetch(url.href, { cache: 'no-store' });
+      return res.ok ? await res.text() : null;
     } catch { return null; }
   }
   function srcTexts(src) {
@@ -1231,14 +1287,14 @@
     save();
   }
 
-  /* Правки других страниц, которые уже стоят в их файлах, уходят из списка сразу после «Открыть папку»,
-     а не когда страницу откроют. По исходнику без отрисовки видно только текст: новый текст и убранный
+  /* Правки других страниц, которые уже стоят в их файлах, уходят из списка сразу после «Открыть папку»
+     или при первой открытой странице у агента в папке, а не когда страницу откроют. По исходнику без отрисовки видно только текст: новый текст и убранный
      текстовый блок. И только у записей, чей текст «было» стоял в самом файле (inSrc), а не дописан скриптом.
      Внесено, если старого текста в файле больше нет, а новый есть (у убранного блока нет ни того, ни другого).
      Сдвиги, размеры и блоки без текста проверятся, когда страницу откроют */
   let appliedElsewhere = 0;
   async function settleOthers() {
-    if (!CFG.srcCache) return;
+    if (!CFG.srcCache && !CFG.server) return;
     const changed = [];
     const want = r => r.kind !== 'note' && r.inSrc && !r.lost && (r.del || r.after !== r.before);
     for (const p of Object.keys(store.pages)) {
